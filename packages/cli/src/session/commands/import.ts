@@ -12,7 +12,7 @@ import {
   readDiscoveryState,
   writeDiscoveryState,
 } from "../domain/discovery-state.ts";
-import { previewCandidateFamilyHints, type FamilyHint } from "../domain/family-hint.ts";
+import { previewCandidateFamilies, type FamilyHint } from "../domain/family-hint.ts";
 import { familyHintText } from "./family-display.ts";
 import type { SecretHit, UnscannedFile } from "../domain/secret-detection.ts";
 import { renderSuspectedHits } from "./render-secret-hits.ts";
@@ -173,55 +173,60 @@ async function resolvePendingInteractively(
   const discovery = await discoverCandidates(ctx.project, ctx.env, harness);
   const pending = discovery.candidates.filter((c) => c.classification.kind === "pending");
   if (pending.length === 0) return;
-  const familyHints = await previewCandidateFamilyHints(
+  const preview = await previewCandidateFamilies(
     ctx.project,
     pending.map((entry) => entry.candidate),
   );
-  const state = await readDiscoveryState(ctx.project.paths.discoveryFile);
-  const associateIds: string[] = [];
-  const resolvedIds = new Set<string>();
-  let stateChanged = false;
-  for (const { candidate } of pending) {
-    const hint = familyHints.get(candidate.candidateId);
-    const familyNote = hint === undefined ? "" : `${familyHintText(hint)}\n`;
-    const choice = await select({
-      message:
-        `${familyNote}Session ${candidate.identity.sourceSessionId} (${candidate.identity.harnessId}) has no resolvable opening path. ` +
-        "Associate it with this project?",
-      options: [
-        { value: "associate", label: "Associate with this project" },
-        { value: "skip", label: "Decide later (keep pending)" },
-        { value: "ignore", label: "Ignore on this machine" },
-      ],
-    });
-    if (isCancel(choice)) throw new GliaError("CANCELLED", "import cancelled");
-    if (choice === "associate") {
-      associateCandidate(state, candidate.candidateId, ctx.project.declaration.projectId);
-      associateIds.push(candidate.candidateId);
-      resolvedIds.add(candidate.candidateId);
-      stateChanged = true;
-    } else if (choice === "ignore") {
-      ignoreCandidate(state, candidate.candidateId);
-      resolvedIds.add(candidate.candidateId);
-      stateChanged = true;
+  try {
+    const state = await readDiscoveryState(ctx.project.paths.discoveryFile);
+    const associateIds: string[] = [];
+    const resolvedIds = new Set<string>();
+    let stateChanged = false;
+    for (const { candidate } of pending) {
+      const hint = preview.hints.get(candidate.candidateId);
+      const familyNote = hint === undefined ? "" : `${familyHintText(hint)}\n`;
+      const choice = await select({
+        message:
+          `${familyNote}Session ${candidate.identity.sourceSessionId} (${candidate.identity.harnessId}) has no resolvable opening path. ` +
+          "Associate it with this project?",
+        options: [
+          { value: "associate", label: "Associate with this project" },
+          { value: "skip", label: "Decide later (keep pending)" },
+          { value: "ignore", label: "Ignore on this machine" },
+        ],
+      });
+      if (isCancel(choice)) throw new GliaError("CANCELLED", "import cancelled");
+      if (choice === "associate") {
+        associateCandidate(state, candidate.candidateId, ctx.project.declaration.projectId);
+        associateIds.push(candidate.candidateId);
+        resolvedIds.add(candidate.candidateId);
+        stateChanged = true;
+      } else if (choice === "ignore") {
+        ignoreCandidate(state, candidate.candidateId);
+        resolvedIds.add(candidate.candidateId);
+        stateChanged = true;
+      }
     }
+    if (stateChanged) await writeDiscoveryState(ctx.project.paths.discoveryFile, state);
+    if (associateIds.length > 0) {
+      const second = await withProgress(
+        ctx,
+        `Accepting ${associateIds.length} associated candidate(s)`,
+        (r) => `Accepted ${r.accepted.length} revision(s)`,
+        () =>
+          runImport(ctx.project, ctx.env, {
+            harness: null,
+            dryRun: false,
+            onlyCandidateIds: associateIds,
+            precaptured: preview.precaptured,
+          }),
+      );
+      mergeFollowUpReport(report, second);
+    }
+    report.pending = report.pending.filter((p) => !resolvedIds.has(String(p["candidateId"])));
+  } finally {
+    await preview.dispose();
   }
-  if (stateChanged) await writeDiscoveryState(ctx.project.paths.discoveryFile, state);
-  if (associateIds.length > 0) {
-    const second = await withProgress(
-      ctx,
-      `Accepting ${associateIds.length} associated candidate(s)`,
-      (r) => `Accepted ${r.accepted.length} revision(s)`,
-      () =>
-        runImport(ctx.project, ctx.env, {
-          harness: null,
-          dryRun: false,
-          onlyCandidateIds: associateIds,
-        }),
-    );
-    mergeFollowUpReport(report, second);
-  }
-  report.pending = report.pending.filter((p) => !resolvedIds.has(String(p["candidateId"])));
 }
 
 export function humanImportReport(report: ImportReport): string {

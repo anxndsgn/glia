@@ -13,7 +13,7 @@ import {
 } from "../domain/discovery-state.ts";
 import { runImport } from "../domain/import.ts";
 import { byRecency } from "./shared.ts";
-import { previewCandidateFamilyHints, type FamilyHint } from "../domain/family-hint.ts";
+import { previewCandidateFamilies, type FamilyHint } from "../domain/family-hint.ts";
 import { familyHintText } from "./family-display.ts";
 import { humanImportReport } from "./import.ts";
 import { renderSuspectedHits } from "./render-secret-hits.ts";
@@ -92,70 +92,76 @@ export const acceptCommand: CommandDefinition = {
 
     // Family analysis must precede every acceptance decision. It captures
     // only into transient machine-local staging and never mutates the
-    // Store or discovery decisions.
-    const familyHints = await previewCandidateFamilyHints(
+    // Store or discovery decisions; the accepted subset adopts the
+    // preview's captured bytes below instead of capturing them again.
+    const preview = await previewCandidateFamilies(
       ctx.project,
       targets.map((entry) => entry.candidate),
     );
-    targets = await confirmTargets(ctx, targets, state, isFlagged, familyHints, {
-      interactive,
-      yes,
-      skippedLines,
-    });
-    if (targets.length === 0) {
-      if (interactive) {
-        const human = [...skippedLines, "nothing accepted."].join("\n");
-        return { json: { accepted: [], skipped: skippedLines }, human };
+    try {
+      targets = await confirmTargets(ctx, targets, state, isFlagged, preview.hints, {
+        interactive,
+        yes,
+        skippedLines,
+      });
+      if (targets.length === 0) {
+        if (interactive) {
+          const human = [...skippedLines, "nothing accepted."].join("\n");
+          return { json: { accepted: [], skipped: skippedLines }, human };
+        }
+        throw new GliaError("CANCELLED", "acceptance cancelled; nothing was imported");
       }
-      throw new GliaError("CANCELLED", "acceptance cancelled; nothing was imported");
-    }
 
-    // Pending and previously ignored Candidates gain their explicit
-    // association first, so the import classifies them as associated.
-    const associating = targets.filter(
-      (t) => t.classification.kind === "pending" || t.classification.kind === "ignored",
-    );
-    if (associating.length > 0) {
-      const decidedAt = new Date().toISOString();
-      for (const entry of associating) {
-        associateCandidate(
-          state,
-          entry.candidate.candidateId,
-          ctx.project.declaration.projectId,
-          decidedAt,
-        );
+      // Pending and previously ignored Candidates gain their explicit
+      // association first, so the import classifies them as associated.
+      const associating = targets.filter(
+        (t) => t.classification.kind === "pending" || t.classification.kind === "ignored",
+      );
+      if (associating.length > 0) {
+        const decidedAt = new Date().toISOString();
+        for (const entry of associating) {
+          associateCandidate(
+            state,
+            entry.candidate.candidateId,
+            ctx.project.declaration.projectId,
+            decidedAt,
+          );
+        }
+        await writeDiscoveryState(ctx.project.paths.discoveryFile, state);
       }
-      await writeDiscoveryState(ctx.project.paths.discoveryFile, state);
-    }
 
-    const tombstonedIds = targets
-      .filter((t) => t.classification.kind === "tombstoned")
-      .map((t) => t.candidate.candidateId);
-    const report = await runImport(ctx.project, ctx.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: targets.map((t) => t.candidate.candidateId),
-      acceptTombstoned: tombstonedIds.length > 0,
-      overrideFlagged: true,
-    });
-    // Deletion collapsed any explicit association for these identities;
-    // re-admission restores it, so subsequent source growth flows as
-    // ordinary Revisions. Written only after acceptance succeeded — the
-    // classification must stay `tombstoned` while the import sessions the
-    // override.
-    const readmitted = tombstonedIds.filter((id) =>
-      report.accepted.some((a) => a.sessionId === id),
-    );
-    if (readmitted.length > 0) {
-      const after = await readDiscoveryState(ctx.project.paths.discoveryFile);
-      const decidedAt = new Date().toISOString();
-      for (const id of readmitted) {
-        associateCandidate(after, id, ctx.project.declaration.projectId, decidedAt);
+      const tombstonedIds = targets
+        .filter((t) => t.classification.kind === "tombstoned")
+        .map((t) => t.candidate.candidateId);
+      const report = await runImport(ctx.project, ctx.env, {
+        harness: null,
+        dryRun: false,
+        onlyCandidateIds: targets.map((t) => t.candidate.candidateId),
+        acceptTombstoned: tombstonedIds.length > 0,
+        overrideFlagged: true,
+        precaptured: preview.precaptured,
+      });
+      // Deletion collapsed any explicit association for these identities;
+      // re-admission restores it, so subsequent source growth flows as
+      // ordinary Revisions. Written only after acceptance succeeded — the
+      // classification must stay `tombstoned` while the import sessions the
+      // override.
+      const readmitted = tombstonedIds.filter((id) =>
+        report.accepted.some((a) => a.sessionId === id),
+      );
+      if (readmitted.length > 0) {
+        const after = await readDiscoveryState(ctx.project.paths.discoveryFile);
+        const decidedAt = new Date().toISOString();
+        for (const id of readmitted) {
+          associateCandidate(after, id, ctx.project.declaration.projectId, decidedAt);
+        }
+        await writeDiscoveryState(ctx.project.paths.discoveryFile, after);
       }
-      await writeDiscoveryState(ctx.project.paths.discoveryFile, after);
+      const human = [...skippedLines, humanImportReport(report)].join("\n");
+      return { json: { ...report, skipped: skippedLines }, human };
+    } finally {
+      await preview.dispose();
     }
-    const human = [...skippedLines, humanImportReport(report)].join("\n");
-    return { json: { ...report, skipped: skippedLines }, human };
   },
 };
 

@@ -21,12 +21,14 @@ import { candidateSummary, discoverCandidates, type DiscoveryResult } from "./di
 import type { ClassifiedCandidate } from "./classify.ts";
 import { readDiscoveryState, writeDiscoveryState } from "./discovery-state.ts";
 import {
+  addStoredIdentities,
   candidateIdentities,
   familyHintOf,
   readStoredIdentities,
   type CandidateIdentities,
   type FamilyHint,
-  type StoredIdentities,
+  type PrecapturedCandidate,
+  type StoredIdentityIndex,
 } from "./family-hint.ts";
 import {
   RULESET_VERSION,
@@ -54,6 +56,14 @@ export interface ImportOptions {
    * a tombstoned Source Identity as a fresh Session with a persisted override.
    */
   acceptTombstoned?: boolean;
+  /**
+   * Bundles the consent-time family preview already captured, keyed by
+   * Candidate ID. Adopted instead of a fresh capture so preview + accept
+   * cost one capture and one normalization per Candidate, not two.
+   * Sources are still revalidated under the writer lease, and the caller
+   * keeps ownership of the preview staging's lifetime.
+   */
+  precaptured?: Map<string, PrecapturedCandidate>;
 }
 
 export interface AcceptedChange {
@@ -178,10 +188,10 @@ export async function runImport(
   // Consent-time Fork Family hints derive from the stored Sessions'
   // identity keys in the published projection; a dry run never reaches
   // here and `session candidates` never captures, so both stay silent.
-  const storedIdentities =
+  const storedIdentities: StoredIdentityIndex =
     toConsider.length > 0
       ? await readStoredIdentities(project)
-      : new Map<string, StoredIdentities>();
+      : { sessions: new Map(), holders: new Map() };
 
   // 1. Capture associated Candidates into machine-local staging.
   const runId = `${Date.now().toString(36)}-${process.pid}`;
@@ -195,9 +205,15 @@ export async function runImport(
     for (const classified of toConsider) {
       const { candidate } = classified;
       try {
-        const stagingDir = join(stagingRunDir, candidate.candidateId);
-        const adapter = adapterFor(candidate.identity.harnessId);
-        const captured = await adapter.capture(candidate, { dir: stagingDir });
+        // A preview capture from the same consent flow is adopted as-is;
+        // the lease-time source revalidation below still guards staleness.
+        const pre = options.precaptured?.get(candidate.candidateId);
+        const stagingDir = pre?.stagingDir ?? join(stagingRunDir, candidate.candidateId);
+        const captured =
+          pre?.captured ??
+          (await adapterFor(candidate.identity.harnessId).capture(candidate, {
+            dir: stagingDir,
+          }));
         const digest = bundleDigest(manifestOf(captured));
         const existing = await readSessionMeta(project.paths.storeDir, candidate.candidateId);
         if (existing && existing.currentRevision.digest === digest) {
@@ -205,7 +221,8 @@ export async function runImport(
           evalUpdates.set(candidate.candidateId, null);
           continue;
         }
-        const familyIdentities = await candidateIdentities(candidate, stagingDir, captured);
+        const familyIdentities =
+          pre?.familyIdentities ?? (await candidateIdentities(candidate, stagingDir, captured));
         let detection: DetectionResult | null = null;
         if (detectionEnabled) {
           detection = await detectSecrets(stagingDir, captured);
@@ -337,7 +354,7 @@ export async function runImport(
         const manifest = manifestOf(item.captured);
         const meta = sessionMetaFor(item, manifest.files.length);
         await writeAcceptedRevision(project.paths.storeDir, meta, manifest, item.stagingDir);
-        storedIdentities.set(candidate.candidateId, item.familyIdentities);
+        addStoredIdentities(storedIdentities, candidate.candidateId, item.familyIdentities);
         evalUpdates.set(candidate.candidateId, null);
         report.accepted.push({
           sessionId: meta.sessionId,
