@@ -33,7 +33,7 @@ const DEFAULT_LIMIT = 20;
 const DEFAULT_PER_SESSION = 3;
 
 export const FILTER_VOCABULARY =
-  "user, agent, toolcall, toolcall:<name>, toolresult, message, lifecycle, system, unknown";
+  "user, agent, toolcall, toolcall:<name>, toolresult, message, lifecycle, system, unknown, subagent";
 
 /** The `--file` matching rule, stated where the decision is made. */
 export const FILE_MATCH_RULE =
@@ -165,6 +165,10 @@ export function parseFilterValue(value: string): EventFilter {
     case "system":
     case "unknown":
       return { slice: "kind", value, eventKind: value };
+    // Not an event kind but a provenance slice: the evidence a subagent
+    // transcript contributed, whatever kinds it holds.
+    case "subagent":
+      return { slice: "subagent", value };
   }
   if (value.startsWith("toolcall:")) {
     const name = value.slice("toolcall:".length);

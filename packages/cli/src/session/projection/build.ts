@@ -8,7 +8,8 @@ import {
   sessionLabel,
   type SessionLabelSource,
 } from "../adapters/label.ts";
-import type { NormalizedEvent } from "../adapters/types.ts";
+import type { NormalizedEvent, StoredSourceBundle } from "../adapters/types.ts";
+import { isSubagentBundlePath } from "../adapters/subagent.ts";
 import { listSessionIds, readSessionMeta, readStoredBundle } from "../storage/store-layout.ts";
 import { createProjectionSchema, PROJECTION_VERSION } from "./schema.ts";
 import { listArchiveMarkers } from "../domain/archive.ts";
@@ -37,8 +38,9 @@ export async function buildProjection(
       `INSERT INTO sessions
          (session_id, harness_id, source_session_id, opening_path, association_mode,
           continuation_parent, revision_digest, accepted_at, archive_state, event_count,
-          first_timestamp, last_timestamp, label, label_source, label_seq)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          first_timestamp, last_timestamp, label, label_source, label_seq,
+          subagent_kind, subagent_parent, subagent_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const insertEvent = db.prepare(
       `INSERT INTO events
@@ -129,9 +131,17 @@ export async function buildProjection(
           insertTouch.run(sessionId, eventRowId, t.operation, t.sourcePath, t.normalizedPath);
         }
         eventCount += 1;
+        // Min/max rather than first/last seen: a bundle projects its main
+        // transcript before the subagent transcripts it spawned, so the
+        // last event in stream order can predate the main transcript's end.
+        // Single-file Sessions are unaffected — transcripts append in order.
         if (event.timestamp) {
-          firstTimestamp ??= event.timestamp;
-          lastTimestamp = event.timestamp;
+          if (firstTimestamp === null || event.timestamp < firstTimestamp) {
+            firstTimestamp = event.timestamp;
+          }
+          if (lastTimestamp === null || event.timestamp > lastTimestamp) {
+            lastTimestamp = event.timestamp;
+          }
         }
       }
       const label = selectLabel(labelCandidates);
@@ -151,6 +161,9 @@ export async function buildProjection(
         label?.text ?? null,
         label?.source ?? null,
         label?.seq ?? null,
+        meta.subagent?.kind ?? null,
+        meta.subagent?.parentSourceSessionId ?? null,
+        subagentTranscriptCount(bundle),
       );
       for (const file of bundle.manifest.files) {
         insertArtifact.run(sessionId, file.path, file.size, file.mediaType, file.sha256);
@@ -166,6 +179,11 @@ export async function buildProjection(
     throw err;
   }
   db.close();
+}
+
+/** How many subagent transcripts the accepted Revision carries. */
+function subagentTranscriptCount(bundle: StoredSourceBundle): number {
+  return bundle.manifest.files.filter((file) => isSubagentBundlePath(file.path)).length;
 }
 
 /**

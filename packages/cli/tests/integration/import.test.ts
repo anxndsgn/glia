@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { runImport } from "../../src/session/domain/import.ts";
 import { discoverCandidates } from "../../src/session/domain/discover.ts";
-import { listSessionIds, readSessionMeta } from "../../src/session/storage/store-layout.ts";
+import {
+  listSessionIds,
+  readSessionMeta,
+  readStoredBundle,
+} from "../../src/session/storage/store-layout.ts";
 import { ProjectStore } from "../../src/core/store/store.ts";
 import { WriterLease } from "../../src/core/store/lease.ts";
 import { GliaError } from "../../src/core/output/errors.ts";
@@ -15,6 +20,7 @@ import {
   makeSecondWorktree,
   makeTestEnv,
   writeClaudeSession,
+  writeClaudeSubagent,
   writeCodexSession,
   type TestEnv,
 } from "../helpers.ts";
@@ -104,6 +110,30 @@ describe("session import", () => {
 
     expect(new Set(revisions).size).toBe(4);
     expect(await listSessionIds(project.paths.storeDir)).toEqual([sessionId]);
+  });
+
+  test("a subagent transcript appearing after accept advances the same session", async () => {
+    const spec = { sessionId: "aaaa-1", cwd: env.worktree };
+    await writeClaudeSession(env.claudeHome, spec);
+    const first = await importAll();
+    const sessionId = first.accepted[0]!.sessionId;
+
+    // The subagent transcript Claude Code writes once the parent spawns one.
+    const projectDir = join(env.claudeHome, "projects", env.worktree.replaceAll("/", "-"));
+    await writeClaudeSubagent(projectDir, spec, { agentId: "alpha" });
+
+    const again = await importAll();
+    expect(again.accepted).toHaveLength(1);
+    expect(again.accepted[0]!.sessionId).toBe(sessionId);
+    // A new Revision of the same Session, not a second Session.
+    expect(again.accepted[0]!.revision).not.toBe(first.accepted[0]!.revision);
+    expect(await listSessionIds(project.paths.storeDir)).toEqual([sessionId]);
+
+    const bundle = await readStoredBundle(project.paths.storeDir, sessionId);
+    expect(bundle.manifest.files.map((f) => f.path)).toEqual([
+      "source/subagents/agent-alpha.jsonl",
+      "source/transcript.jsonl",
+    ]);
   });
 
   test("source disappearance never deletes or archives the session", async () => {

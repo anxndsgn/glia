@@ -143,6 +143,120 @@ describe("session projection", () => {
     expect(again.storeCommit).toBe(first.storeCommit);
   });
 
+  test("projects subagent columns for both directions of the relation", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "cc-parent",
+      cwd: env.worktree,
+      subagents: [{ agentId: "alpha" }, { agentId: "beta" }],
+    });
+    await writeCodexSession(env.codexHome, {
+      sessionId: "22222222-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      subagent: { kind: "review", parentThreadId: "11111111-2222-3333-4444-555555555555" },
+    });
+    // A subagent whose parent thread was never imported.
+    await writeCodexSession(env.codexHome, {
+      sessionId: "33333333-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      subagent: { kind: "guardian", parentThreadId: "never-imported-thread" },
+    });
+    await runImport(project, env.env, { harness: null, dryRun: false, onlyCandidateIds: null });
+
+    const handle = await ensureProjection(project, env.env);
+    const db = openProjection(handle.dbPath);
+    try {
+      const bySource = new Map(listSessions(db).map((s) => [s.sourceSessionId, s]));
+
+      const parent = bySource.get("cc-parent")!;
+      expect(parent.subagentCount).toBe(2);
+      expect(parent.subagentKind).toBeNull();
+
+      const resolved = bySource.get("22222222-2222-3333-4444-555555555555")!;
+      expect(resolved.subagentKind).toBe("review");
+      expect(resolved.subagentParent).toBe("11111111-2222-3333-4444-555555555555");
+      // The parent rollout is imported, so it resolves to a Session ID.
+      expect(resolved.subagentParentSession).toBe(
+        bySource.get("11111111-2222-3333-4444-555555555555")!.sessionId,
+      );
+
+      // An unimported parent stays the raw source ID; it never becomes null,
+      // and no other Session is guessed into its place.
+      const unresolved = bySource.get("33333333-2222-3333-4444-555555555555")!;
+      expect(unresolved.subagentParent).toBe("never-imported-thread");
+      expect(unresolved.subagentParentSession).toBeNull();
+
+      // A Session carrying no subagents states so, rather than null.
+      expect(bySource.get("aaaa-1")!.subagentCount).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("session timestamps span every transcript in the bundle, not stream order", async () => {
+    // The subagent transcript's events all predate the main transcript's
+    // last event, so first/last-seen ordering would report the subagent's
+    // time as the Session's end.
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "cc-times",
+      cwd: env.worktree,
+      subagents: [
+        {
+          agentId: "alpha",
+          lines: [
+            {
+              type: "assistant",
+              uuid: "alpha-a1",
+              sessionId: "cc-times",
+              agentId: "alpha",
+              isSidechain: true,
+              timestamp: "2026-07-15T09:59:00Z",
+              message: { role: "assistant", content: [{ type: "text", text: "early" }] },
+            },
+          ],
+        },
+      ],
+    });
+    await runImport(project, env.env, { harness: null, dryRun: false, onlyCandidateIds: null });
+
+    const handle = await ensureProjection(project, env.env);
+    const db = openProjection(handle.dbPath);
+    try {
+      const session = listSessions(db).find((s) => s.sourceSessionId === "cc-times")!;
+      expect(session.firstTimestamp).toBe("2026-07-15T09:59:00Z");
+      expect(session.lastTimestamp).toBe("2026-07-15T10:00:20Z");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("the subagent filter selects only subagent-file events", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "cc-filter",
+      cwd: env.worktree,
+      userText: "shared needle in the main transcript",
+      subagents: [{ agentId: "alpha", spawnPrompt: "shared needle in the subagent transcript" }],
+    });
+    await runImport(project, env.env, { harness: null, dryRun: false, onlyCandidateIds: null });
+
+    const handle = await ensureProjection(project, env.env);
+    const db = openProjection(handle.dbPath);
+    try {
+      const all = searchText(db, params({ query: "shared needle" }));
+      const onlySubagent = searchText(
+        db,
+        params({ query: "shared needle", filters: [parseFilterValue("subagent")] }),
+      );
+      expect(all.totalMatches).toBe(2);
+      expect(onlySubagent.totalMatches).toBe(1);
+      const group = onlySubagent.groups[0];
+      expect(group?.matches[0]?.locator.sourceFile).toBe("source/subagents/agent-alpha.jsonl");
+      // Match group headers carry the same subagent facts a listing does.
+      expect(group?.subagentCount).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   test("fts query input is literal text, never operators", async () => {
     const handle = await ensureProjection(project, env.env);
     const db = openProjection(handle.dbPath);

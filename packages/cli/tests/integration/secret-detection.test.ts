@@ -70,6 +70,23 @@ describe("secret detection at the acceptance boundary", () => {
     expect(JSON.stringify(state)).not.toContain(FAKE_KEY);
   });
 
+  test("a credential seeded only in a subagent transcript still gates accept", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "leaky-sub",
+      cwd: env.worktree,
+      subagents: [{ agentId: "alpha", spawnPrompt: `use the key ${FAKE_KEY} to authenticate` }],
+    });
+
+    const report = await importAll();
+    expect(report.accepted).toHaveLength(0);
+    expect(report.flagged).toHaveLength(1);
+    const hits = report.flagged[0]!["suspectedSecrets"] as { ruleId: string; file: string }[];
+    expect(hits.map((h) => h.ruleId)).toContain("anthropic-api-key");
+    // The hit addresses the subagent file it was actually found in.
+    expect(hits.map((h) => h.file)).toContain("source/subagents/agent-alpha.jsonl");
+    expect(JSON.stringify(report)).not.toContain(FAKE_KEY);
+  });
+
   test("session accept takes the exact flagged bytes and sessions the override", async () => {
     const sourcePath = await writeClaudeSession(env.claudeHome, {
       sessionId: "leaky-2",

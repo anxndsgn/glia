@@ -266,6 +266,7 @@ export interface CodexSessionSpec {
   sessionId: string;
   cwd: string | null;
   resumedFrom?: string;
+  userText?: string;
   agentText?: string;
   preambleLines?: unknown[];
   mirrorUserMessage?: boolean;
@@ -302,6 +303,7 @@ export async function writeCodexSession(
       meta["session_id"] = spec.sessionId;
     }
   }
+  const userText = spec.userText ?? "add retry logic to the sync loop";
   const lines: unknown[] = [
     { timestamp: "2026-07-15T09:00:00Z", type: "session_meta", payload: meta },
     ...(spec.preambleLines ?? []),
@@ -312,7 +314,7 @@ export async function writeCodexSession(
         type: "message",
         id: "m1",
         role: "user",
-        content: [{ type: "input_text", text: "add retry logic to the sync loop" }],
+        content: [{ type: "input_text", text: userText }],
       },
     },
     ...(spec.mirrorUserMessage
@@ -322,7 +324,7 @@ export async function writeCodexSession(
             type: "event_msg",
             payload: {
               type: "user_message",
-              message: "add retry logic to the sync loop",
+              message: userText,
               client_id: "client-1",
             },
           },

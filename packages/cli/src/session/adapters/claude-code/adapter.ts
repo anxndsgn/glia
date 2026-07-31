@@ -4,6 +4,12 @@ import { readdir } from "node:fs/promises";
 import { asObject, asString, readJsonlLines } from "../jsonl.ts";
 import { LABEL_PAYLOAD_KEY, META_PAYLOAD_KEY, sessionLabel } from "../label.ts";
 import { captureAllowlisted, directoryExists, touch } from "../capture.ts";
+import {
+  isSubagentBundlePath,
+  subagentIdOf,
+  SUBAGENT_BUNDLE_PREFIX,
+  SUBAGENT_PAYLOAD_KEY,
+} from "../subagent.ts";
 import { candidateIdOf } from "../../domain/identity.ts";
 import { projected } from "../types.ts";
 import type {
@@ -21,10 +27,6 @@ import type {
 } from "../types.ts";
 
 const TRANSCRIPT_BUNDLE_PATH = "source/transcript.jsonl";
-const SUBAGENT_BUNDLE_PREFIX = "source/subagents/";
-
-/** The `payload` key carrying the subagent an event's evidence came from. */
-export const SUBAGENT_PAYLOAD_KEY = "subagentId";
 
 /**
  * Claude Code stores Sessions as JSONL transcripts under
@@ -165,13 +167,8 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
 function subagentBundlePaths(bundle: StoredSourceBundle): string[] {
   return bundle.manifest.files
     .map((file) => file.path)
-    .filter((path) => path.startsWith(SUBAGENT_BUNDLE_PREFIX))
+    .filter(isSubagentBundlePath)
     .sort();
-}
-
-/** `source/subagents/agent-<agentId>.jsonl` → `<agentId>`. */
-function subagentIdOf(bundlePath: string): string {
-  return basename(bundlePath, ".jsonl").replace(/^agent-/, "");
 }
 
 /**
