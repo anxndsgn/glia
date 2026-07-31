@@ -127,7 +127,11 @@ describe("interactive session import family hint", () => {
     expect(report.accepted).toHaveLength(0);
     expect(selectMessages).toHaveLength(1);
     expect(selectMessages[0]).toContain("(fork family)");
-    expect(selectMessages[0]).toMatch(/shares \d+ of \d+ events with ses_.*… \(fork family\)/);
+    // The twin's secret suffix keeps it short of full containment, and the
+    // stored origin is named by its Label alongside its ID.
+    expect(selectMessages[0]).toMatch(
+      /shares \d+ of \d+ events with “FLAGPROBE shared prefix” ses_.*… \(fork family\)/,
+    );
     // The note renders before the decision prompt.
     expect(selectMessages[0]!.indexOf("(fork family)")).toBeLessThan(
       selectMessages[0]!.indexOf("Accept anyway?"),

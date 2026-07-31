@@ -665,10 +665,14 @@ describe("Session Fork Family", () => {
     expect(hint!.withSessionId).toBe(origin);
     expect(hint!.sharedEvents).toBeGreaterThan(0);
     expect(hint!.sharedEvents).toBeLessThanOrEqual(hint!.totalEvents);
+    // The twin copies the whole file: full containment is stated outright,
+    // and the stored Session is named by its Label alongside its ID.
+    expect(hint!.sharedEvents).toBe(hint!.totalEvents);
+    expect(hint!.withSessionLabel).toBe("HINTPROBE shared prefix");
     const reportText = humanImportReport(report);
     expect(reportText).toContain(
-      `${recId("hint-twin")} shares ${hint!.sharedEvents} of ${hint!.totalEvents} events with ` +
-        `${origin.slice(0, 10)}… (fork family)`,
+      `${recId("hint-twin")} has all ${hint!.totalEvents} of its events already stored in ` +
+        `“HINTPROBE shared prefix” ${origin.slice(0, 10)}… (fork family)`,
     );
 
     // session accept names the same overlap: the largest-overlap stored
@@ -683,9 +687,10 @@ describe("Session Fork Family", () => {
     });
     expect(await readSessionMeta(project.paths.storeDir, recId("hint-twin-2"))).toBeNull();
     const accepted = await acceptCommand.run(ctx, [recId("hint-twin-2")], { yes: true });
-    expect(accepted.human).toContain(`${recId("hint-twin-2")} shares `);
+    expect(accepted.human).toContain(`${recId("hint-twin-2")} has all `);
     expect(accepted.human).toContain(
-      `events with ${best.slice(0, 10)}… (fork family; 1 more related session(s))`,
+      `already stored in “HINTPROBE shared prefix” ${best.slice(0, 10)}… ` +
+        `(fork family; 1 more related session(s))`,
     );
     const acceptedJson = accepted.json as { accepted: { familyHint: FamilyHint | null }[] };
     expect(acceptedJson.accepted[0]!.familyHint?.withSessionId).toBe(best);
