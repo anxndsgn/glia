@@ -452,6 +452,36 @@ describe("Session Fork Family", () => {
     expect(selfMember.lastShared).toBeNull();
   });
 
+  test("fork twins with rewritten envelope fields (gitBranch, later cwd) still form one family", async () => {
+    // A desktop fork rewrites envelope fields (`sessionId` always;
+    // `gitBranch`, `cwd` sometimes) while keeping `uuid`, `timestamp`, and
+    // `message` intact — the source behavior Shared Event Identity depends
+    // on. The first event's cwd stays resolvable so the twin imports.
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "env-origin",
+      cwd: env.worktree,
+      userText: "ENVPROBE shared prefix",
+    });
+    const dir = join(env.claudeHome, "projects", env.worktree.replaceAll("/", "-"));
+    const source = await Bun.file(join(dir, "env-origin.jsonl")).text();
+    const copied = source
+      .trim()
+      .split("\n")
+      .map((line, index) => {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        parsed["sessionId"] = "env-twin";
+        parsed["gitBranch"] = "fork-branch";
+        if (index > 0) parsed["cwd"] = "/rewritten/by/the/fork";
+        return JSON.stringify(parsed);
+      });
+    await Bun.write(join(dir, "env-twin.jsonl"), copied.join("\n") + "\n");
+    await importAll();
+
+    const listed = await list();
+    const twinRow = listed.json.sessions.find((r) => r.sessionId === recId("env-twin"))!;
+    expect(twinRow.family?.memberCount).toBe(2);
+  });
+
   test("three-member families mark (also in 2 sessions) and report suppressed copies in JSON", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "tri-origin",
