@@ -389,6 +389,57 @@ describe("codex adapter", () => {
     expect(userEvents.every((event) => event.payload?.["harnessInjected"] === true)).toBeTrue();
   });
 
+  test("reads subagent kind and parent thread id from every observed source shape", async () => {
+    await writeCodexSession(env.codexHome, {
+      sessionId: "aaaaaaa1-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      subagent: { kind: "review", parentThreadId: "parent-thread-1" },
+    });
+    await writeCodexSession(env.codexHome, {
+      sessionId: "aaaaaaa2-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      subagent: { kind: "guardian", parentThreadId: "parent-thread-2", nestedKind: true },
+    });
+    // The legacy shape: flagged a subagent, but stating no parent.
+    await writeCodexSession(env.codexHome, {
+      sessionId: "aaaaaaa3-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      subagent: true,
+    });
+    await writeCodexSession(env.codexHome, {
+      sessionId: "aaaaaaa4-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+    });
+
+    const bySourceId = new Map(
+      (await discoverAll(codexAdapter)).map((c) => [c.identity.sourceSessionId, c]),
+    );
+    expect(bySourceId.get("aaaaaaa1-2222-3333-4444-555555555555")?.subagent).toEqual({
+      kind: "review",
+      parentSourceSessionId: "parent-thread-1",
+    });
+    expect(bySourceId.get("aaaaaaa2-2222-3333-4444-555555555555")?.subagent).toEqual({
+      kind: "guardian",
+      parentSourceSessionId: "parent-thread-2",
+    });
+    // No parent is ever inferred for a rollout that states none.
+    expect(bySourceId.get("aaaaaaa3-2222-3333-4444-555555555555")?.subagent).toEqual({
+      kind: "guardian",
+      parentSourceSessionId: null,
+    });
+    expect(bySourceId.get("aaaaaaa4-2222-3333-4444-555555555555")?.subagent).toBeNull();
+  });
+
+  test("a subagent relation is never read as continuation", async () => {
+    await writeCodexSession(env.codexHome, {
+      sessionId: "aaaaaaa5-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      subagent: { kind: "review", parentThreadId: "parent-thread-1" },
+    });
+    const candidates = await discoverAll(codexAdapter);
+    expect(candidates[0]?.continuation).toBeNull();
+  });
+
   test("projects patch changes as file touches and keeps unknown kinds locatable", async () => {
     await writeCodexSession(env.codexHome, {
       sessionId: "33333333-2222-3333-4444-555555555555",

@@ -17,6 +17,7 @@ import type {
   SessionCandidate,
   StagingArea,
   StoredSourceBundle,
+  SubagentOrigin,
 } from "../types.ts";
 
 const TRANSCRIPT_BUNDLE_PATH = "source/transcript.jsonl";
@@ -75,6 +76,7 @@ export const codexAdapter: SessionHarnessAdapter = {
       yield {
         identity,
         candidateId: candidateIdOf(identity),
+        subagent: subagentOrigin(payload),
         openingPath: payload ? asString(payload["cwd"]) : null,
         sourceFiles: [
           {
@@ -174,6 +176,26 @@ function isSubagentSession(meta: Record<string, unknown> | null): boolean {
   if (meta?.["thread_source"] === "subagent") return true;
   const source = meta ? asObject(meta["source"]) : null;
   return source !== null && source["subagent"] !== undefined;
+}
+
+/**
+ * What `session_meta.payload` states about a subagent rollout. The kind is
+ * spelled two ways in real rollouts — `source.subagent` as a plain string,
+ * and `{ other: "<name>" }` for kinds outside the named set — and neither
+ * is guaranteed, so an unnamed subagent is still a subagent.
+ *
+ * `parent_thread_id` appears only in rollouts carrying `multi_agent_version`
+ * (seen from 2026-07). Older subagent rollouts state no parent, and none is
+ * inferred: the parent stays unknown.
+ */
+function subagentOrigin(meta: Record<string, unknown> | null): SubagentOrigin | null {
+  if (!isSubagentSession(meta)) return null;
+  const subagent = meta ? asObject(meta["source"])?.["subagent"] : undefined;
+  const nested = asObject(subagent);
+  return {
+    kind: asString(subagent) ?? (nested ? asString(nested["other"]) : null),
+    parentSourceSessionId: meta ? asString(meta["parent_thread_id"]) : null,
+  };
 }
 
 /**

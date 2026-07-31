@@ -122,6 +122,9 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
         yield {
           identity,
           candidateId: candidateIdOf(identity),
+          // Claude Code subagents are evidence inside their parent Session,
+          // never Sessions of their own, so no candidate is ever a subagent.
+          subagent: null,
           openingPath,
           sourceFiles: [
             {

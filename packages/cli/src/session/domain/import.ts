@@ -518,6 +518,9 @@ function sessionMetaFor(item: StagedCandidate, fileCount: number): SessionMeta {
           : `opening path ${candidate.openingPath ?? "(unknown)"} mapped through a machine-local binding`,
     },
     continuation: candidate.continuation,
+    // Written only when the source states it, so a non-subagent Session's
+    // metadata is byte-identical to what it was before the field existed.
+    ...(candidate.subagent ? { subagent: candidate.subagent } : {}),
     currentRevision: {
       digest: item.digest,
       acceptedAt: new Date().toISOString(),

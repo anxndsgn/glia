@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { cp, mkdir, readdir, rm } from "node:fs/promises";
-import type { BundleManifest, StoredSourceBundle } from "../adapters/types.ts";
+import type { BundleManifest, StoredSourceBundle, SubagentOrigin } from "../adapters/types.ts";
 import type { HarnessId } from "../../core/harnesses/ids.ts";
 import { GliaError } from "../../core/output/errors.ts";
 import { requireSupportedSchemaVersion } from "../../core/state/schema-version.ts";
@@ -28,6 +28,13 @@ export interface SessionMeta {
     evidence: string;
   };
   continuation: { parentSessionId: string } | null;
+  /**
+   * Present when the source marks this Session as a Harness-spawned
+   * subagent. Optional and additive: `SESSION_META_SCHEMA_VERSION` stays 1
+   * because a reader that predates the field parses the Session fine and
+   * merely projects it without subagent badges.
+   */
+  subagent?: SubagentOrigin;
   currentRevision: {
     digest: string;
     acceptedAt: string;

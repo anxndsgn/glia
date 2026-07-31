@@ -21,6 +21,16 @@ export interface SessionCandidate {
   /** Objective continuation metadata when the source sessions it. */
   continuation: { parentSessionId: string } | null;
   /**
+   * Present when the source marks this Session as a Harness-spawned
+   * subagent. `parentSourceSessionId` is null when the source carries no
+   * parent link — a parent is never inferred from time, path, or adjacency.
+   *
+   * A subagent relation is display-only: it is deliberately not fed into
+   * `continuation`, which would place subagents into Fork Families and
+   * change what a family means.
+   */
+  subagent: SubagentOrigin | null;
+  /**
    * Source-provided Session time (the earliest source timestamp the
    * adapter reads during discovery); null when the source carries none.
    * Ordering metadata only — never fabricated from file system facts.
@@ -33,6 +43,13 @@ export interface SessionCandidate {
    * source evidence, never generated; null when the source sessions neither.
    */
   label: string | null;
+}
+
+export interface SubagentOrigin {
+  /** Source-native subagent kind, e.g. `review`; null when unnamed. */
+  kind: string | null;
+  /** The parent's source Session ID; null when the source states none. */
+  parentSourceSessionId: string | null;
 }
 
 export interface SourceFileRef {

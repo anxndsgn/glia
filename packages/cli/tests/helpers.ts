@@ -269,7 +269,13 @@ export interface CodexSessionSpec {
   agentText?: string;
   preambleLines?: unknown[];
   mirrorUserMessage?: boolean;
-  subagent?: boolean;
+  /**
+   * `true` writes the observed `{ other: <name> }` shape. An object writes
+   * the shape the modern multi-agent rollouts carry, including
+   * `parent_thread_id` when a parent is stated; `nestedKind` selects the
+   * `{ other: … }` spelling over the plain string.
+   */
+  subagent?: boolean | { kind: string; parentThreadId?: string; nestedKind?: boolean };
   extraLines?: unknown[];
 }
 
@@ -283,9 +289,18 @@ export async function writeCodexSession(
   const meta: Record<string, unknown> = { id: spec.sessionId, timestamp: "2026-07-15T09:00:00Z" };
   if (spec.cwd !== null) meta["cwd"] = spec.cwd;
   if (spec.resumedFrom) meta["resumed_from"] = spec.resumedFrom;
-  if (spec.subagent) {
+  if (spec.subagent === true) {
     meta["thread_source"] = "subagent";
     meta["source"] = { subagent: { other: "guardian" } };
+  } else if (spec.subagent) {
+    const { kind, parentThreadId, nestedKind } = spec.subagent;
+    meta["thread_source"] = "subagent";
+    meta["source"] = { subagent: nestedKind ? { other: kind } : kind };
+    meta["multi_agent_version"] = 1;
+    if (parentThreadId !== undefined) {
+      meta["parent_thread_id"] = parentThreadId;
+      meta["session_id"] = spec.sessionId;
+    }
   }
   const lines: unknown[] = [
     { timestamp: "2026-07-15T09:00:00Z", type: "session_meta", payload: meta },
