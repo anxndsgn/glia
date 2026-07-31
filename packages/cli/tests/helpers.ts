@@ -139,6 +139,13 @@ export async function makeSecondReplica(
  */
 export const FAKE_KEY = ["sk-ant", "api03-FAKEFAKEFAKEFAKE"].join("-");
 
+export interface ClaudeSubagentSpec {
+  agentId: string;
+  /** Extra records appended after the harness-authored spawn prompt. */
+  lines?: unknown[];
+  spawnPrompt?: string;
+}
+
 export interface ClaudeSessionSpec {
   sessionId: string;
   cwd: string;
@@ -147,6 +154,8 @@ export interface ClaudeSessionSpec {
   readFilePath?: string;
   writtenFilePath?: string;
   extraLines?: unknown[];
+  /** Sibling subagent transcripts under `<stem>/subagents/`. */
+  subagents?: ClaudeSubagentSpec[];
 }
 
 /** Writes a sanitized Claude Code transcript fixture; never real user history. */
@@ -209,6 +218,46 @@ export async function writeClaudeSession(
     ...(spec.extraLines ?? []),
   ];
   const path = join(dir, `${spec.sessionId}.jsonl`);
+  await Bun.write(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  for (const subagent of spec.subagents ?? []) {
+    await writeClaudeSubagent(dir, spec, subagent);
+  }
+  return path;
+}
+
+/**
+ * One subagent transcript beside its parent, in the source-native layout:
+ * `<dir>/<stem>/subagents/agent-<agentId>.jsonl`, carrying the parent's
+ * `sessionId`, `isSidechain: true`, and the harness-authored spawn prompt
+ * as its first user record.
+ */
+export async function writeClaudeSubagent(
+  projectDir: string,
+  spec: ClaudeSessionSpec,
+  subagent: ClaudeSubagentSpec,
+): Promise<string> {
+  const dir = join(projectDir, spec.sessionId, "subagents");
+  await mkdir(dir, { recursive: true });
+  const envelope = {
+    sessionId: spec.sessionId,
+    agentId: subagent.agentId,
+    isSidechain: true,
+    cwd: spec.cwd,
+  };
+  const lines: unknown[] = [
+    {
+      type: "user",
+      uuid: `${subagent.agentId}-u1`,
+      ...envelope,
+      timestamp: "2026-07-15T10:00:20Z",
+      message: {
+        role: "user",
+        content: subagent.spawnPrompt ?? "search the repo for retry helpers",
+      },
+    },
+    ...(subagent.lines ?? []),
+  ];
+  const path = join(dir, `agent-${subagent.agentId}.jsonl`);
   await Bun.write(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
   return path;
 }

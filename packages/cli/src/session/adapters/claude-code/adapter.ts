@@ -15,11 +15,16 @@ import type {
   NormalizedEventKind,
   SessionHarnessAdapter,
   SessionCandidate,
+  SourceFileRef,
   StagingArea,
   StoredSourceBundle,
 } from "../types.ts";
 
 const TRANSCRIPT_BUNDLE_PATH = "source/transcript.jsonl";
+const SUBAGENT_BUNDLE_PREFIX = "source/subagents/";
+
+/** The `payload` key carrying the subagent an event's evidence came from. */
+export const SUBAGENT_PAYLOAD_KEY = "subagentId";
 
 /**
  * Claude Code stores Sessions as JSONL transcripts under
@@ -29,6 +34,13 @@ const TRANSCRIPT_BUNDLE_PATH = "source/transcript.jsonl";
  * - The stable Session ID is the `sessionId` field carried by transcript
  *   events (falling back to the file name stem, which Claude Code derives
  *   from the same ID).
+ * - A subagent invocation gets its own transcript beside the main one, at
+ *   `<stem>/subagents/agent-<agentId>.jsonl` (the directory is keyed by the
+ *   transcript's file stem, not by the event-carried `sessionId`). Those
+ *   records share the main envelope and additionally carry `agentId`,
+ *   `isSidechain: true`, and the parent's `sessionId`. They are evidence of
+ *   the parent Session — captured into its bundle, never a Session of their
+ *   own — so `sessionIdOf` and Fork Family semantics are untouched.
  * - The Opening Path is the `cwd` of the earliest event that carries one;
  *   the munged directory name is not authoritative.
  * - Resuming appends to the same session file; a desktop fork creates a
@@ -104,7 +116,8 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
             }
           }
         }
-        sessionId ??= basename(fileName, ".jsonl");
+        const stem = basename(fileName, ".jsonl");
+        sessionId ??= stem;
         const identity = { harnessId: "claude-code" as const, sourceSessionId: sessionId };
         yield {
           identity,
@@ -116,6 +129,7 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
               bundlePath: TRANSCRIPT_BUNDLE_PATH,
               mediaType: "application/jsonl",
             },
+            ...(await subagentSourceFiles(join(dir, stem))),
           ],
           continuation: parentSessionId ? { parentSessionId } : null,
           sessionTime,
@@ -130,42 +144,114 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
   },
 
   async *project(bundle: StoredSourceBundle): AsyncIterable<NormalizedEvent> {
-    const lines = await readJsonlLines(join(bundle.dir, TRANSCRIPT_BUNDLE_PATH));
-    for (const line of lines) {
-      const base = {
-        sourceFile: TRANSCRIPT_BUNDLE_PATH,
-        sourceCursor: `line:${line.line}`,
-      };
-      if (!line.value) {
-        yield { ...base, ...projected("unknown"), timestamp: null };
-        continue;
-      }
-      const value = line.value;
-      const type = asString(value["type"]);
-      const message = asObject(value["message"]);
-      const kind = classify(type, message);
-      const title = titleOf(type, value);
-      yield {
-        ...base,
-        kind,
-        sourceEventId: asString(value["uuid"]),
-        timestamp: asString(value["timestamp"]),
-        role: message ? asString(message["role"]) : null,
-        // A title line carries its title as the event's text: it is
-        // source-provided evidence, and dropping it lost the one readable
-        // name the Session has.
-        text: title?.text ?? extractText(message),
-        payload: title
-          ? { [LABEL_PAYLOAD_KEY]: title.source }
-          : type === "user" && value["isMeta"] === true
-            ? { [META_PAYLOAD_KEY]: true }
-            : null,
-        toolNames: kind === "tool_call" ? extractToolNames(message) : [],
-        fileTouches: extractFileTouches(value, message),
-      };
+    // The main transcript first, then each subagent transcript in manifest
+    // path order, so a Session's evidence reads parent-before-children and
+    // one bundle always projects in the same order.
+    yield* projectFile(bundle, TRANSCRIPT_BUNDLE_PATH, null);
+    for (const path of subagentBundlePaths(bundle)) {
+      yield* projectFile(bundle, path, subagentIdOf(path));
     }
   },
 };
+
+/**
+ * The subagent transcripts a bundle carries, read from its manifest rather
+ * than the filesystem: the manifest is the accepted Revision's file list, so
+ * projection never sees anything capture did not attest.
+ */
+function subagentBundlePaths(bundle: StoredSourceBundle): string[] {
+  return bundle.manifest.files
+    .map((file) => file.path)
+    .filter((path) => path.startsWith(SUBAGENT_BUNDLE_PREFIX))
+    .sort();
+}
+
+/** `source/subagents/agent-<agentId>.jsonl` → `<agentId>`. */
+function subagentIdOf(bundlePath: string): string {
+  return basename(bundlePath, ".jsonl").replace(/^agent-/, "");
+}
+
+/**
+ * One transcript file's events. `subagentId` is non-null for a subagent
+ * transcript, where every user-role record is the parent Harness speaking —
+ * the spawn prompt it authored and the tool_result envelopes it relays — so
+ * the events are marked injected and never read as the Session's Label.
+ */
+async function* projectFile(
+  bundle: StoredSourceBundle,
+  bundlePath: string,
+  subagentId: string | null,
+): AsyncIterable<NormalizedEvent> {
+  const lines = await readJsonlLines(join(bundle.dir, bundlePath));
+  for (const line of lines) {
+    const base = {
+      sourceFile: bundlePath,
+      sourceCursor: `line:${line.line}`,
+    };
+    if (!line.value) {
+      yield { ...base, ...projected("unknown"), timestamp: null };
+      continue;
+    }
+    const value = line.value;
+    const type = asString(value["type"]);
+    const message = asObject(value["message"]);
+    const kind = classify(type, message);
+    const title = titleOf(type, value);
+    // A main-file line may itself be sidechain evidence in transcripts
+    // older than the sibling-directory layout. Read it as the subagent
+    // evidence it is; per-agent grouping is not reconstructed.
+    const inlineSubagentId =
+      subagentId ?? (value["isSidechain"] === true ? (asString(value["agentId"]) ?? "") : null);
+    const harnessInjected =
+      (inlineSubagentId !== null && type === "user") ||
+      (type === "user" && value["isMeta"] === true);
+    yield {
+      ...base,
+      kind,
+      sourceEventId: asString(value["uuid"]),
+      timestamp: asString(value["timestamp"]),
+      role: message ? asString(message["role"]) : null,
+      // A title line carries its title as the event's text: it is
+      // source-provided evidence, and dropping it lost the one readable
+      // name the Session has.
+      text: title?.text ?? extractText(message),
+      payload: eventPayload(title, harnessInjected, inlineSubagentId),
+      toolNames: kind === "tool_call" ? extractToolNames(message) : [],
+      fileTouches: extractFileTouches(value, message),
+    };
+  }
+}
+
+function eventPayload(
+  title: { source: "custom_title" | "ai_title" | "summary" } | null,
+  harnessInjected: boolean,
+  subagentId: string | null,
+): Record<string, unknown> | null {
+  const payload: Record<string, unknown> = {};
+  if (title) payload[LABEL_PAYLOAD_KEY] = title.source;
+  if (harnessInjected) payload[META_PAYLOAD_KEY] = true;
+  // The empty string marks a legacy inline sidechain line that names no
+  // agent; the marker still belongs on the event, the id is simply absent.
+  if (subagentId) payload[SUBAGENT_PAYLOAD_KEY] = subagentId;
+  return Object.keys(payload).length > 0 ? payload : null;
+}
+
+/**
+ * The subagent transcripts sitting beside a main transcript. A missing
+ * directory is the ordinary case (most Sessions spawn none) and yields
+ * nothing; names are sorted so manifests and Revision digests stay
+ * deterministic.
+ */
+async function subagentSourceFiles(sessionSubdir: string): Promise<SourceFileRef[]> {
+  const dir = join(sessionSubdir, "subagents");
+  if (!(await directoryExists(dir))) return [];
+  const names = (await readdir(dir)).filter((f) => f.startsWith("agent-") && f.endsWith(".jsonl"));
+  return names.sort().map((name) => ({
+    absolutePath: join(dir, name),
+    bundlePath: `${SUBAGENT_BUNDLE_PREFIX}${name}`,
+    mediaType: "application/jsonl",
+  }));
+}
 
 /**
  * The Session titles Claude Code sessions as their own transcript lines: a
