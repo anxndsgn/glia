@@ -180,6 +180,12 @@ export function visibleFamilyFacts(
 export interface FamilyMemberDetail {
   sessionId: string;
   archiveState: ArchiveState;
+  /** Distinct identity keys this member shares with the addressed Session;
+   *  0 for the addressed Session itself and for continuation-only links. */
+  sharedEvents: number;
+  /** The addressed Session's last event shared with this member — the
+   *  point after which the two diverge; null when nothing is shared. */
+  lastShared: { seq: number; timestamp: string | null } | null;
 }
 
 export interface FamilyDetail {
@@ -190,7 +196,9 @@ export interface FamilyDetail {
 /**
  * One Session's family over the whole Store — the direct-address rule:
  * archive filtering does not apply, and archived members are reported
- * with their state so the caller can mark them.
+ * with their state so the caller can mark them. Each member carries its
+ * overlap with the addressed Session: how many events are shared, and
+ * where in the addressed Session that shared history ends.
  */
 export function sessionFamilyDetail(db: Database, sessionId: string): FamilyDetail | null {
   const row = db
@@ -205,7 +213,34 @@ export function sessionFamilyDetail(db: Database, sessionId: string): FamilyDeta
        JOIN sessions r ON r.session_id = f.session_id
        WHERE f.family_key = ?`,
     )
-    .all(row.familyKey) as (FamilyMemberDetail & { firstTimestamp: string | null })[];
+    .all(row.familyKey) as {
+    sessionId: string;
+    archiveState: ArchiveState;
+    firstTimestamp: string | null;
+  }[];
+  // Overlap with the addressed Session per member: shared distinct keys
+  // and the addressed Session's last shared seq. Membership is restricted
+  // to the family so an incidental cross-Harness identity match (equal
+  // identifier, timestamp, and text in another Harness) contributes nothing.
+  const overlaps = db
+    .query(
+      `SELECT e2.session_id AS sessionId,
+              COUNT(DISTINCT e1.identity_key) AS sharedEvents,
+              MAX(e1.seq) AS lastSharedSeq
+       FROM events e1
+       JOIN events e2 ON e2.identity_key = e1.identity_key
+         AND e2.session_id <> e1.session_id
+       JOIN session_families f ON f.session_id = e2.session_id AND f.family_key = ?
+       WHERE e1.session_id = ? AND e1.identity_key IS NOT NULL
+       GROUP BY e2.session_id`,
+    )
+    .all(row.familyKey, sessionId) as {
+    sessionId: string;
+    sharedEvents: number;
+    lastSharedSeq: number;
+  }[];
+  const overlapOf = new Map(overlaps.map((o) => [o.sessionId, o]));
+  const timestampAt = db.prepare("SELECT timestamp FROM events WHERE session_id = ? AND seq = ?");
   const anchor = chooseAnchor(members);
   members.sort((a, b) => {
     if (a.sessionId === anchor) return -1;
@@ -214,6 +249,26 @@ export function sessionFamilyDetail(db: Database, sessionId: string): FamilyDeta
   });
   return {
     anchor,
-    members: members.map(({ sessionId, archiveState }) => ({ sessionId, archiveState })),
+    members: members.map((member) => {
+      const overlap = overlapOf.get(member.sessionId);
+      const lastShared =
+        overlap === undefined
+          ? null
+          : {
+              seq: overlap.lastSharedSeq,
+              timestamp:
+                (
+                  timestampAt.get(sessionId, overlap.lastSharedSeq) as {
+                    timestamp: string | null;
+                  } | null
+                )?.timestamp ?? null,
+            };
+      return {
+        sessionId: member.sessionId,
+        archiveState: member.archiveState,
+        sharedEvents: overlap?.sharedEvents ?? 0,
+        lastShared,
+      };
+    }),
   };
 }

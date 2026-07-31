@@ -406,6 +406,50 @@ describe("Session Fork Family", () => {
     expect(result.human).toContain("(continues cont-parent)");
     expect(result.human).toContain("(family of 2)");
     expect(result.human).toContain(`(family: ${anchor})`);
+
+    // Direct address states that the members hold no directly shared events.
+    const shown = await show(parent);
+    const childLine = shown.human.split("\n").find((l) => l.trim().startsWith(child))!;
+    expect(childLine).toContain("no directly shared events");
+  });
+
+  test("show states each member's overlap and the divergence point in the addressed Session", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "div-origin",
+      cwd: env.worktree,
+      userText: "DIVPROBE one",
+      extraLines: [userLine("div-origin", "2026-07-15T10:05:00Z", "DIVPROBE two")],
+    });
+    // The default fixture plus the extra line is four lines; copy all four,
+    // then let the twin diverge with its own suffix.
+    await writeForkTwin("div-origin", "div-twin", 4, [
+      userLine("div-twin", "2026-07-15T11:00:00Z", "DIVTWIN unique"),
+    ]);
+    await importAll();
+    const origin = recId("div-origin");
+    const twin = recId("div-twin");
+    const originCount = (await list()).json.sessions.find(
+      (r) => r.sessionId === origin,
+    )!.eventCount;
+
+    const shown = await show(origin);
+    const twinLine = shown.human.split("\n").find((l) => l.trim().startsWith(twin))!;
+    expect(twinLine).toContain(`shares ${originCount} event(s)`);
+    expect(twinLine).toContain(`diverges after #${originCount}`);
+
+    interface MemberJson {
+      sessionId: string;
+      sharedEvents: number;
+      lastShared: { seq: number; timestamp: string | null } | null;
+    }
+    const family = (shown.json["session"] as { family: { members: MemberJson[] } }).family;
+    const twinMember = family.members.find((m) => m.sessionId === twin)!;
+    expect(twinMember.sharedEvents).toBe(originCount);
+    expect(twinMember.lastShared?.seq).toBe(originCount);
+    // The addressed Session itself carries no overlap facts.
+    const selfMember = family.members.find((m) => m.sessionId === origin)!;
+    expect(selfMember.sharedEvents).toBe(0);
+    expect(selfMember.lastShared).toBeNull();
   });
 
   test("three-member families mark (also in 2 sessions) and report suppressed copies in JSON", async () => {

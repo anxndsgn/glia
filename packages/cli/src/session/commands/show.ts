@@ -23,7 +23,9 @@ export const showCommand: CommandDefinition = {
         .map(([kind, n]) => `${kind}=${n}`)
         .join(" ");
       // Direct address reports the family over the whole Store: archive
-      // filtering does not apply, and archived members are marked.
+      // filtering does not apply, and archived members are marked. Each
+      // other member states its overlap with this Session and where the
+      // shared history ends — the divergence point of a fork twin.
       const familyLines: string[] = [];
       if (detail.family !== null) {
         familyLines.push(
@@ -36,7 +38,21 @@ export const showCommand: CommandDefinition = {
           ]
             .filter((note): note is string => note !== null)
             .join(" ");
-          familyLines.push(`    ${member.sessionId}${notes === "" ? "" : ` ${notes}`}`);
+          let overlap = "";
+          if (member.sessionId !== detail.sessionId) {
+            if (member.lastShared !== null) {
+              const at =
+                member.lastShared.timestamp === null ? "" : ` (${member.lastShared.timestamp})`;
+              overlap =
+                ` — shares ${member.sharedEvents} event(s), ` +
+                `diverges after #${member.lastShared.seq}${at}`;
+            } else {
+              // Continuation links and transitive family ties share nothing
+              // directly with the addressed Session.
+              overlap = " — no directly shared events";
+            }
+          }
+          familyLines.push(`    ${member.sessionId}${notes === "" ? "" : ` ${notes}`}${overlap}`);
         }
       }
       const human = [
