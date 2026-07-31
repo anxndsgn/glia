@@ -26,20 +26,40 @@ export interface FamilyFacts {
  */
 export function detectFamilies(db: Database): void {
   const edges: { a: string; b: string }[] = [];
-  // An unordered pair needs only one direction: union-find treats the
-  // edge the same either way, and `>` halves the join's output rows.
-  const shared = db
+  // Shared-identity edges come from per-key holder lists, not an events
+  // self-join: a join emits one row per shared event per Session pair, so
+  // a long fork prefix held by several twins multiplies out before its
+  // DISTINCT. Restricting to keys with two or more holding Sessions and
+  // deduplicating to (key, Session) keeps the row count at the number of
+  // distinct holdings.
+  const holdings = db
     .query(
-      `SELECT DISTINCT e1.session_id AS a, e2.session_id AS b
-       FROM events e1
-       JOIN sessions r1 ON r1.session_id = e1.session_id
-       JOIN events e2 ON e2.identity_key = e1.identity_key
-         AND e2.session_id > e1.session_id
-       JOIN sessions r2 ON r2.session_id = e2.session_id AND r2.harness_id = r1.harness_id
-       WHERE e1.identity_key IS NOT NULL`,
+      `WITH shared_keys AS (
+         SELECT identity_key FROM events
+         WHERE identity_key IS NOT NULL
+         GROUP BY identity_key
+         HAVING COUNT(DISTINCT session_id) >= 2
+       )
+       SELECT DISTINCT e.identity_key AS key, e.session_id AS sessionId, r.harness_id AS harnessId
+       FROM events e
+       JOIN shared_keys s ON s.identity_key = e.identity_key
+       JOIN sessions r ON r.session_id = e.session_id`,
     )
-    .all() as { a: string; b: string }[];
-  edges.push(...shared);
+    .all() as { key: string; sessionId: string; harnessId: string }[];
+  // Within one key, Sessions of one Harness are pairwise connected; for
+  // union-find, linking each holder to the group's first member suffices.
+  const holdersByKey = Map.groupBy(holdings, (row) => row.key);
+  for (const holders of holdersByKey.values()) {
+    const firstOfHarness = new Map<string, string>();
+    for (const { sessionId, harnessId } of holders) {
+      const first = firstOfHarness.get(harnessId);
+      if (first === undefined) {
+        firstOfHarness.set(harnessId, sessionId);
+      } else {
+        edges.push({ a: first, b: sessionId });
+      }
+    }
+  }
   const continuations = db
     .query(
       `SELECT r1.session_id AS a, r2.session_id AS b
