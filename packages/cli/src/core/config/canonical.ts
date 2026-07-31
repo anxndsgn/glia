@@ -9,8 +9,7 @@
  * - two-space indentation and a trailing newline.
  */
 
-/** The Declaration field registry, in registry order. Each key is claimed
- * by exactly one spec; unclaimed keys are reserved. */
+/** The Declaration field registry, in registry order. Unclaimed keys are reserved. */
 export const DECLARATION_KEY_REGISTRY = [
   "schemaVersion",
   "projectId",

@@ -86,11 +86,11 @@ export function serializeLedgerFile(events: StoreDeletionEvent[]): {
 }
 
 /**
- * The same-path ledger merge rule — the charter's deterministically
- * mergeable case, never a frozen conflict: the union of both sides'
- * events, with concurrent duplicates competing for one epoch slot
- * resolved by earlier deletion timestamp, tie-broken by Replica ID. The
- * losing metadata remains traceable in Store history like any merge input.
+ * The same-path ledger merge rule is deterministically mergeable, never
+ * a frozen conflict: the union of both sides' events, with concurrent
+ * duplicates competing for one epoch slot resolved by earlier deletion
+ * timestamp, tie-broken by Replica ID. The losing metadata remains
+ * traceable in Store history like any merge input.
  */
 export function mergeLedgerEvents(
   a: StoreDeletionEvent[],

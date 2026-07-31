@@ -123,8 +123,8 @@ export interface RewriteResult {
 }
 
 /**
- * The deterministic replay engine ([ADR 0018]): a pure function of the
- * pre-rewrite history and the ordered purge paths. Every commit maps
+ * The deterministic replay engine is a pure function of the pre-rewrite
+ * history and the ordered purge paths. Every commit maps
  * one-to-one — the raw commit object is reproduced byte-for-byte with
  * only the tree and parent lines replaced, so author, committer,
  * timestamps, message, and order are preserved exactly, tree-unchanged

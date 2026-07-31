@@ -1,9 +1,9 @@
 /**
- * Secret Detection per the spec: an advisory gate at the acceptance
- * boundary. Pattern rules only — a rule is admitted only when the
+ * Secret Detection is an advisory gate at the acceptance boundary.
+ * Pattern rules only — a rule is admitted only when the
  * credential format is self-evident, so false positives are near zero
- * by construction (ADR 0017). Every hit is a *suspected* secret; a
- * clean scan never means a clean Session.
+ * by construction. Every hit is a *suspected* secret; a clean scan never
+ * means a clean Session.
  */
 
 /** Monotonically increasing ruleset snapshot marker, persisted with hits. */

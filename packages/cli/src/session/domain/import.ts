@@ -106,10 +106,9 @@ interface StagedCandidate {
 }
 
 /**
- * Import sequence per the Session Session spec: discover and classify,
- * capture into machine-local staging, then under the writer lease
- * revalidate, accept, commit the Store once, and rebuild + atomically
- * publish the projection.
+ * Import sequence: discover and classify, capture into machine-local
+ * staging, then under the writer lease revalidate, accept, commit the
+ * Store once, and rebuild + atomically publish the projection.
  */
 export async function runImport(
   project: LoadedProject,

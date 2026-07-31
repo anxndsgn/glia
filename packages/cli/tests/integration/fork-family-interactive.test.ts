@@ -93,7 +93,6 @@ async function copiedTwin(
 }
 
 describe("interactive session import family hint", () => {
-  // Verification 9 — docs/spec/session-fork-family.md
   test("the fork-family note renders before a flagged Candidate's decision prompt", async () => {
     const cwd = testEnv.worktree;
     await writeClaudeSession(testEnv.claudeHome, {
@@ -135,7 +134,6 @@ describe("interactive session import family hint", () => {
     );
   });
 
-  // Verification 9 — docs/spec/session-fork-family.md
   test("session accept shows the family hint before confirmation and Store mutation", async () => {
     await writeClaudeSession(testEnv.claudeHome, {
       sessionId: "accept-origin",
@@ -170,7 +168,6 @@ describe("interactive session import family hint", () => {
     expect((accepted.json as { accepted: unknown[] }).accepted).toHaveLength(1);
   });
 
-  // Verification 9 — docs/spec/session-fork-family.md
   test("pending interactive import shows the family hint before association", async () => {
     await writeClaudeSession(testEnv.claudeHome, {
       sessionId: "pending-origin",

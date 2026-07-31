@@ -38,7 +38,7 @@ const TRANSCRIPT_BUNDLE_PATH = "source/transcript.jsonl";
  *   sometimes) and sessioning no `parentSessionId` (validated against
  *   Claude Code desktop transcripts, 2026-07). Each source session ID
  *   stays one Session; fork twins are related through Shared Event
- *   Identity at the projection layer (docs/spec/session-fork-family.md).
+ *   Identity at the projection layer.
  *   A top-level `parentSessionId` is still preserved as continuation
  *   metadata whenever an event carries one.
  */

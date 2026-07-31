@@ -169,7 +169,6 @@ describe("Session Fork Family", () => {
     expect(result.json.matches.some((match) => match.excerpt?.includes("strong"))).toBeTrue();
   });
 
-  // Verification 1, 9 — docs/spec/session-fork-family.md
   test("list windows family facts to shown Sessions and same-run imports hint later twins", async () => {
     await writeRawSession("window-anchor", [
       userLine("window-anchor", "2026-07-15T09:00:00Z", "ANCHORONLY opening"),
@@ -231,7 +230,6 @@ describe("Session Fork Family", () => {
     expect(result.human).not.toContain(`(family: ${hiddenAnchor})`);
   });
 
-  // Verification 1, 5 — docs/spec/session-fork-family.md
   test("fork twins form one family: list notes, JSON family, and the singular (also in …) marker", async () => {
     await writeTwinPair("fork-origin", "fork-twin", "ORIGINPROBE opening", [
       userLine("fork-twin", "2026-07-15T11:00:00Z", "TWINPROBE suffix"),
@@ -281,7 +279,6 @@ describe("Session Fork Family", () => {
     expect(unique.human).not.toContain("also in");
   });
 
-  // Verification 2 — docs/spec/session-fork-family.md
   test("the anchor is the earliest-started member; undated members order last", async () => {
     // early-b started earlier (09:00) than early-a (10:00); they share one
     // later event, so the family anchor is early-b's Session.
@@ -316,7 +313,6 @@ describe("Session Fork Family", () => {
     expect(undated.family).toEqual({ anchor: recId("dated-1"), memberCount: 2 });
   });
 
-  // Verification 3 — docs/spec/session-fork-family.md
   test("differing text, missing identifiers, and cross-Harness equality never connect Sessions", async () => {
     // Same identifier and timestamp, different text: no edge.
     await writeRawSession("diff-a", [
@@ -372,7 +368,6 @@ describe("Session Fork Family", () => {
     expect(listed.human).not.toContain("(family");
   });
 
-  // Verification 4 — docs/spec/session-fork-family.md
   test("a Continuation-linked pair with zero shared events is one family and collapses nothing", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "cont-parent",
@@ -413,7 +408,6 @@ describe("Session Fork Family", () => {
     expect(result.human).toContain(`(family: ${anchor})`);
   });
 
-  // Verification 5 — docs/spec/session-fork-family.md
   test("three-member families mark (also in 2 sessions) and report suppressed copies in JSON", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "tri-origin",
@@ -446,7 +440,6 @@ describe("Session Fork Family", () => {
     expect(result.human).not.toContain(`(also in ${others[0]})`);
   });
 
-  // Verification 6 — docs/spec/session-fork-family.md
   test("collapsed matches count against the attributed Session's quota only; sort and context unchanged", async () => {
     // Both members hold the shared prefix plus their own unique suffix,
     // so the assertions hold whichever Session ID sorts first.
@@ -499,7 +492,6 @@ describe("Session Fork Family", () => {
     expect(withContext.human).toContain("» #");
   });
 
-  // Verification 7 — docs/spec/session-fork-family.md
   test("archiving the anchor moves attribution and notes to the visible set; show reports the whole Store", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "arc-origin",
@@ -566,7 +558,6 @@ describe("Session Fork Family", () => {
     expect(aloneList.json.sessions.find((r) => r.sessionId === recId("arc-b"))!.family).toBeNull();
   });
 
-  // Verification 8 — docs/spec/session-fork-family.md
   test("deleting one member leaves the survivor with no family facts; the tombstone blocks re-import", async () => {
     await writeTwinPair("del-origin", "del-twin", "DELPROBE shared");
     await importAll();
@@ -595,7 +586,6 @@ describe("Session Fork Family", () => {
     expect(relisted.json.sessions[0]!.family).toBeNull();
   });
 
-  // Verification 9 — docs/spec/session-fork-family.md
   test("accept and import state the overlap; dry-run and candidates stay silent", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "hint-origin",
@@ -658,7 +648,6 @@ describe("Session Fork Family", () => {
     expect(acceptedJson.accepted[0]!.familyHint?.furtherSessions).toBe(1);
   });
 
-  // Verification 9 — docs/spec/session-fork-family.md
   test("family hints fall back to stored bundles when the projection is absent", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "fallback-origin",
@@ -677,7 +666,6 @@ describe("Session Fork Family", () => {
     expect(report.accepted[0]!.familyHint?.sharedEvents).toBeGreaterThan(0);
   });
 
-  // Verification 10 — docs/spec/session-fork-family.md
   test("a byte-identical re-import is a no-op; a grown twin recomputes family facts on rebuild", async () => {
     await writeTwinPair("grow-origin", "grow-twin", "GROWPROBE shared");
     const first = await importAll();
@@ -711,7 +699,6 @@ describe("Session Fork Family", () => {
     expect(twinRow.eventCount).toBe(originRow.eventCount + 1);
   });
 
-  // Verification 11 — docs/spec/session-fork-family.md
   test("a projection persisted under the previous version rebuilds transparently; reading stays read-only", async () => {
     await writeTwinPair("rebuild-origin", "rebuild-twin", "REBUILDPROBE shared");
     await importAll();
