@@ -1,4 +1,5 @@
 import type { SessionCandidate } from "../adapters/types.ts";
+import { isSubagentBundlePath } from "../adapters/subagent.ts";
 
 /** Width of the `MM-DD HH:mm` column, for padding rows with no time. */
 export const SHORT_TIME_WIDTH = 11;
@@ -23,4 +24,22 @@ export function candidateDisplayLabel(candidate: SessionCandidate): string {
   return (
     candidate.label ?? `(${candidate.identity.harnessId} ${candidate.identity.sourceSessionId})`
   );
+}
+
+/**
+ * What a Candidate carries beyond its main transcript, stated before the
+ * reader accepts it: a subagent rollout says what it is, and a Candidate
+ * whose bundle gained subagent transcripts says why its Revision will
+ * change. Empty when neither holds.
+ */
+export function candidateSubagentNote(candidate: SessionCandidate): string {
+  if (candidate.subagent !== null) {
+    const kind = candidate.subagent.kind === null ? "" : `(${candidate.subagent.kind})`;
+    return `  subagent${kind}`;
+  }
+  const count = candidate.sourceFiles.filter((file) =>
+    isSubagentBundlePath(file.bundlePath),
+  ).length;
+  if (count === 0) return "";
+  return `  +${count} subagent transcript${count === 1 ? "" : "s"}`;
 }

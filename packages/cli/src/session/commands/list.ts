@@ -5,6 +5,7 @@ import { ensureProjection } from "../projection/publish.ts";
 import { listSessions, openProjection, type SessionRow } from "../projection/query.ts";
 import { listFamilyRows, visibleFamilyFacts, type FamilyFacts } from "../projection/family.ts";
 import { familyNote } from "./family-display.ts";
+import { subagentNote } from "./subagent-display.ts";
 import { dateRange } from "./search.ts";
 import { dimmer, padWidth, truncateWidth } from "../../core/output/terminal.ts";
 
@@ -176,6 +177,8 @@ function sessionLine(
   const from = session.firstTimestamp?.slice(0, 10) ?? null;
   if (from !== null && from !== group) notes.push(`from ${from}`);
   if (session.continuationParent !== null) notes.push(`(continues ${session.continuationParent})`);
+  const subagent = subagentNote(session);
+  if (subagent !== null) notes.push(subagent);
   const familyNoteText = familyNote(session.sessionId, family);
   if (familyNoteText !== null) notes.push(familyNoteText);
   if (session.archiveState === "archived") notes.push("[archived]");

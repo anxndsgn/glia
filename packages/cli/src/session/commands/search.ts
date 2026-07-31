@@ -10,6 +10,7 @@ import {
   seqRange,
 } from "./shared.ts";
 import { alsoInMarker, familyNote } from "./family-display.ts";
+import { subagentMatchMarker, subagentNote } from "./subagent-display.ts";
 import { ensureProjection } from "../projection/publish.ts";
 import {
   getLogicalEventsBySeqs,
@@ -304,7 +305,10 @@ function renderTextMatch(match: TextMatch, seqWidth: number, prefix: string): st
   const mark = multiplicityMarker(match.eventSeq, match.runLastSeq);
   const copies = alsoInMarker(match.alsoIn);
   const line = `${prefix}${seq} ${label} ${timestamp}  ${match.excerpt}${mark}${copies}`;
-  const locator = `${" ".repeat(2 + seqWidth + 1)}${match.locator.sourceFile}:${match.locator.sourceCursor}`;
+  // The locator already names the subagent transcript; the marker says so
+  // in the vocabulary the reader filters by.
+  const from = subagentMatchMarker(match.locator.sourceFile);
+  const locator = `${" ".repeat(2 + seqWidth + 1)}${match.locator.sourceFile}:${match.locator.sourceCursor}${from}`;
   return [line, locator];
 }
 
@@ -313,8 +317,9 @@ function renderFileTouchMatch(match: FileTouchMatch, seqWidth: number, prefix: s
   const path = match.sourcePath.replace(/\s+/g, " ");
   const mark = multiplicityMarker(match.eventSeq, match.runLastSeq);
   const copies = alsoInMarker(match.alsoIn);
+  const from = subagentMatchMarker(match.locator.sourceFile);
   return [
-    `${prefix}${seq} ${match.operation} ${path}  ${match.locator.sourceFile}:${match.locator.sourceCursor}${mark}${copies}`,
+    `${prefix}${seq} ${match.operation} ${path}  ${match.locator.sourceFile}:${match.locator.sourceCursor}${from}${mark}${copies}`,
   ];
 }
 
@@ -385,6 +390,8 @@ function sessionHeader(group: SessionMatchGroup<unknown>): string {
   const range = dateRange(group.firstTimestamp, group.lastTimestamp);
   if (range) parts.push(range);
   if (group.continuationParent) parts.push(`(continues ${group.continuationParent})`);
+  const subagent = subagentNote(group);
+  if (subagent !== null) parts.push(subagent);
   const family = familyNote(group.sessionId, group.family);
   if (family !== null) parts.push(family);
   if (group.archiveState === "archived") parts.push("[archived]");
