@@ -1,0 +1,63 @@
+import type { CommandDefinition } from "../../core/session-module.ts";
+import type { CommandOutcome } from "../../core/output/result.ts";
+import { GliaError } from "../../core/output/errors.ts";
+import { ensureProjection } from "../projection/publish.ts";
+import { getSessionDetail, openProjection } from "../projection/query.ts";
+import { requireSessionUnconflicted } from "../domain/conflict.ts";
+import { missingSessionError } from "../domain/deletion.ts";
+
+export const showCommand: CommandDefinition = {
+  name: "show",
+  description: "show one accepted Session's objective metadata",
+  arguments: [{ name: "session-id", description: "the Session ID" }],
+  async run(ctx, args): Promise<CommandOutcome> {
+    const sessionId = args[0];
+    if (!sessionId) throw new GliaError("USAGE", "session show requires a <session-id>");
+    await requireSessionUnconflicted(ctx.project.paths.storeDir, sessionId);
+    const handle = await ensureProjection(ctx.project, ctx.env);
+    const db = openProjection(handle.dbPath);
+    try {
+      const detail = getSessionDetail(db, sessionId);
+      if (!detail) throw await missingSessionError(ctx.project.paths.storeDir, sessionId);
+      const kinds = Object.entries(detail.eventKinds)
+        .map(([kind, n]) => `${kind}=${n}`)
+        .join(" ");
+      // Direct address reports the family over the whole Store: archive
+      // filtering does not apply, and archived members are marked.
+      const familyLines: string[] = [];
+      if (detail.family !== null) {
+        familyLines.push(
+          `  family: ${detail.family.members.length} member(s), anchor ${detail.family.anchor}`,
+        );
+        for (const member of detail.family.members) {
+          const notes = [
+            member.sessionId === detail.family.anchor ? "(anchor)" : null,
+            member.archiveState === "archived" ? "[archived]" : null,
+          ]
+            .filter((note): note is string => note !== null)
+            .join(" ");
+          familyLines.push(`    ${member.sessionId}${notes === "" ? "" : ` ${notes}`}`);
+        }
+      }
+      const human = [
+        `session ${detail.sessionId}`,
+        `  harness: ${detail.harnessId}`,
+        `  source session: ${detail.sourceSessionId}`,
+        `  opening path: ${detail.openingPath ?? "(unresolved)"}`,
+        `  association: ${detail.associationMode}`,
+        `  archive state: ${detail.archiveState}`,
+        detail.continuationParent ? `  continues: ${detail.continuationParent}` : null,
+        ...familyLines,
+        `  revision: ${detail.revisionDigest.slice(0, 12)} accepted ${detail.acceptedAt}`,
+        `  events: ${detail.eventCount} (${kinds})`,
+        `  file touches: ${detail.fileTouchCount}`,
+        `  bundle files: ${detail.artifacts.length}`,
+      ]
+        .filter((l): l is string => l !== null)
+        .join("\n");
+      return { json: { session: detail }, human };
+    } finally {
+      db.close();
+    }
+  },
+};

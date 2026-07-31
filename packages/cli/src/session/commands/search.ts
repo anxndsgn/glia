@@ -1,0 +1,396 @@
+import type { CommandDefinition } from "../../core/session-module.ts";
+import type { CommandOutcome } from "../../core/output/result.ts";
+import { GliaError } from "../../core/output/errors.ts";
+import {
+  LABEL_WIDTH,
+  lineText,
+  nonNegativeInt,
+  positiveInt,
+  repeatedValues,
+  seqRange,
+} from "./shared.ts";
+import { alsoInMarker, familyNote } from "./family-display.ts";
+import { ensureProjection } from "../projection/publish.ts";
+import {
+  getLogicalEventsBySeqs,
+  listLogicalSeqs,
+  openProjection,
+  searchFileTouches,
+  searchText,
+  type EventFilter,
+  type FileTouchMatch,
+  type SessionMatchGroup,
+  type SearchParams,
+  type SearchResult,
+  type SearchSort,
+  type TextMatch,
+  type ViewEvent,
+} from "../projection/query.ts";
+import { parseHarnessOption } from "./import.ts";
+import type { Database } from "bun:sqlite";
+
+const DEFAULT_LIMIT = 20;
+const DEFAULT_PER_SESSION = 3;
+
+export const FILTER_VOCABULARY =
+  "user, agent, toolcall, toolcall:<name>, toolresult, message, lifecycle, system, unknown";
+
+/** The `--file` matching rule, stated where the decision is made. */
+export const FILE_MATCH_RULE =
+  "matches a touched path exactly, or as whole trailing path segments after a '/'" +
+  " (session-session.md matches docs/spec/session-session.md; docs/spec matches nothing)";
+
+const SORT_MODES = "relevance, time";
+
+export const searchCommand: CommandDefinition = {
+  name: "search",
+  description: "search accepted Store evidence; never imports and never changes the Store",
+  arguments: [{ name: "[query]", description: "text query; every term matches as a substring" }],
+  options: [
+    {
+      flags: "--file <path>",
+      description: `restrict to Sessions with a matching File Touch; the value ${FILE_MATCH_RULE}`,
+    },
+    { flags: "--harness <id>", description: "filter by harness (codex or claude-code)" },
+    {
+      flags: "--since <time>",
+      description: "filter events at or after an ISO 8601 date or timestamp",
+    },
+    {
+      flags: "--filter <value>",
+      description: `slice events by ${FILTER_VOCABULARY}; repeatable, values union`,
+      repeatable: true,
+    },
+    {
+      flags: "--per-session <n>",
+      description: `matches shown per Session (default ${DEFAULT_PER_SESSION})`,
+    },
+    { flags: "--limit <count>", description: `maximum matches shown (default ${DEFAULT_LIMIT})` },
+    {
+      flags: "-C, --context <n>",
+      description:
+        "show up to <n> neighboring events around each match, from the Session unfiltered (default 0)",
+    },
+    {
+      flags: "--sort <mode>",
+      description: `order Session groups by ${SORT_MODES}; time is oldest-first by earliest matching event (default relevance)`,
+    },
+    {
+      flags: "--include-archived",
+      description: "include matches from Archived Sessions and label them",
+    },
+  ],
+  async run(ctx, args, options): Promise<CommandOutcome> {
+    const query = args[0] ?? null;
+    const file = options["file"] !== undefined ? String(options["file"]) : null;
+    if (query === null && file === null) {
+      throw new GliaError("USAGE", "session search requires a text query, --file, or both");
+    }
+    const filterValues = repeatedValues(options["filter"]);
+    const context = nonNegativeInt(options["context"], "--context", 0);
+    const params: SearchParams = {
+      query,
+      file,
+      harness: parseHarnessOption(options["harness"]),
+      since: normalizeSince(options["since"]),
+      filters: filterValues.map(parseFilterValue),
+      limit: positiveInt(options["limit"], "--limit", DEFAULT_LIMIT),
+      perSession: positiveInt(options["perSession"], "--per-session", DEFAULT_PER_SESSION),
+      sort: parseSortMode(options["sort"]),
+      includeArchived: options["includeArchived"] === true,
+    };
+    const parameters = {
+      query,
+      file,
+      harness: params.harness,
+      since: params.since,
+      filter: filterValues,
+      perSession: params.perSession,
+      limit: params.limit,
+      context,
+      sort: params.sort,
+      includeArchived: params.includeArchived,
+    };
+
+    const handle = await ensureProjection(ctx.project, ctx.env);
+    const db = openProjection(handle.dbPath);
+    try {
+      const projection = { storeCommit: handle.storeCommit, stale: handle.stale };
+      if (params.query !== null) {
+        const result = searchText(db, params);
+        const contexts = computeContexts(db, result.groups, context);
+        return {
+          json: {
+            mode: "text",
+            totalMatches: result.totalMatches,
+            familyCollapsedMatches: result.familyCollapsedMatches,
+            matches: flattenGroups(result.groups, contexts),
+            parameters,
+            projection,
+          },
+          human: renderGroups(result, params, contexts, renderTextMatch, "matches"),
+        };
+      }
+      const result = searchFileTouches(db, params);
+      const contexts = computeContexts(db, result.groups, context);
+      return {
+        json: {
+          mode: "file_touches",
+          totalMatches: result.totalMatches,
+          familyCollapsedMatches: result.familyCollapsedMatches,
+          matches: flattenGroups(result.groups, contexts),
+          parameters,
+          projection,
+        },
+        human: renderGroups(result, params, contexts, renderFileTouchMatch, "file touches"),
+      };
+    } finally {
+      db.close();
+    }
+  },
+};
+
+export function parseFilterValue(value: string): EventFilter {
+  switch (value) {
+    case "user":
+      return { slice: "speaker", value, role: "user" };
+    case "agent":
+      return { slice: "speaker", value, role: "assistant" };
+    case "toolcall":
+      return { slice: "kind", value, eventKind: "tool_call" };
+    case "toolresult":
+      return { slice: "kind", value, eventKind: "tool_result" };
+    case "message":
+    case "lifecycle":
+    case "system":
+    case "unknown":
+      return { slice: "kind", value, eventKind: value };
+  }
+  if (value.startsWith("toolcall:")) {
+    const name = value.slice("toolcall:".length);
+    if (name.length > 0) return { slice: "tool", value, toolName: name };
+  }
+  throw new GliaError("USAGE", `--filter accepts ${FILTER_VOCABULARY}; got: ${value}`);
+}
+
+function parseSortMode(raw: unknown): SearchSort {
+  if (raw === undefined) return "relevance";
+  const value = String(raw);
+  if (value === "relevance" || value === "time") return value;
+  throw new GliaError("USAGE", `--sort accepts ${SORT_MODES}; got: ${value}`);
+}
+
+function normalizeSince(value: unknown): string | null {
+  if (value === undefined) return null;
+  const raw = String(value);
+  const isoLike = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+  if (!isoLike.test(raw)) {
+    throw new GliaError("USAGE", `--since must be an ISO 8601 date or timestamp, got ${raw}`);
+  }
+  return raw;
+}
+
+/** The visible multiplicity marker for a collapsed run; empty for a singleton. */
+export function multiplicityMarker(eventSeq: number, runLastSeq: number): string {
+  const count = runLastSeq - eventSeq + 1;
+  return count > 1 ? ` ×${count}` : "";
+}
+
+interface GroupContext {
+  /** Context-only logical events for the group (shown matches excluded), by seq. */
+  events: ViewEvent[];
+  /** Each shown match's own context window seqs, in seq order. */
+  perMatch: Map<number, number[]>;
+}
+
+/**
+ * `-C` neighborhoods: up to `n` logical events on each side of every
+ * shown match, drawn from the Session unfiltered. Windows overlap-merge,
+ * and an event shown as a match never repeats as context.
+ */
+function computeContexts<M extends { eventSeq: number }>(
+  db: Database,
+  groups: SessionMatchGroup<M>[],
+  n: number,
+): Map<string, GroupContext> {
+  const contexts = new Map<string, GroupContext>();
+  if (n === 0) return contexts;
+  for (const group of groups) {
+    const logical = listLogicalSeqs(db, group.sessionId);
+    const position = new Map<number, number>();
+    logical.forEach((entry, index) => position.set(entry.seq, index));
+    const shown = new Set(group.matches.map((m) => m.eventSeq));
+    const perMatch = new Map<number, number[]>();
+    const contextSeqs = new Set<number>();
+    for (const match of group.matches) {
+      const at = position.get(match.eventSeq);
+      if (at === undefined) continue;
+      const window: number[] = [];
+      for (let i = Math.max(0, at - n); i <= Math.min(logical.length - 1, at + n); i += 1) {
+        const seq = logical[i]!.seq;
+        if (shown.has(seq)) continue;
+        window.push(seq);
+        contextSeqs.add(seq);
+      }
+      perMatch.set(match.eventSeq, window);
+    }
+    contexts.set(group.sessionId, {
+      events: getLogicalEventsBySeqs(db, group.sessionId, [...contextSeqs]),
+      perMatch,
+    });
+  }
+  return contexts;
+}
+
+/** The JSON match array: display order, Session identity on every match. */
+function flattenGroups<M extends { eventSeq: number; runLastSeq: number }>(
+  groups: SessionMatchGroup<M>[],
+  contexts: Map<string, GroupContext>,
+): object[] {
+  const flat: object[] = [];
+  for (const group of groups) {
+    const groupContext = contexts.get(group.sessionId);
+    const bySeq = new Map<number, ViewEvent>();
+    for (const event of groupContext?.events ?? []) bySeq.set(event.seq, event);
+    for (const match of group.matches) {
+      const { runLastSeq, ...fields } = match;
+      const contextSeqs = groupContext?.perMatch.get(match.eventSeq);
+      flat.push({
+        sessionId: group.sessionId,
+        revisionDigest: group.revisionDigest,
+        harnessId: group.harnessId,
+        archiveState: group.archiveState,
+        ...fields,
+        memberSeqs: seqRange(match.eventSeq, match.runLastSeq),
+        ...(contextSeqs
+          ? {
+              context: contextSeqs
+                .map((seq) => bySeq.get(seq))
+                .filter((e): e is ViewEvent => e !== undefined)
+                .map((e) => ({
+                  seq: e.seq,
+                  line: lineText(e),
+                  memberSeqs: seqRange(e.runFirstSeq, e.runLastSeq),
+                  locator: e.locator,
+                })),
+            }
+          : {}),
+      });
+    }
+  }
+  return flat;
+}
+
+/** Speaker and event labels use the `--filter` vocabulary. */
+export function eventLabel(kind: string, role: string | null): string {
+  if (kind === "message") {
+    if (role === "user") return "user";
+    if (role === "assistant") return "agent";
+    return "message";
+  }
+  if (kind === "tool_call") return "toolcall";
+  if (kind === "tool_result") return "toolresult";
+  return kind;
+}
+
+function renderTextMatch(match: TextMatch, seqWidth: number, prefix: string): string[] {
+  const seq = `#${match.eventSeq}`.padEnd(seqWidth);
+  const label = eventLabel(match.eventKind, match.role).padEnd(LABEL_WIDTH);
+  const timestamp = match.timestamp ?? "-";
+  const mark = multiplicityMarker(match.eventSeq, match.runLastSeq);
+  const copies = alsoInMarker(match.alsoIn);
+  const line = `${prefix}${seq} ${label} ${timestamp}  ${match.excerpt}${mark}${copies}`;
+  const locator = `${" ".repeat(2 + seqWidth + 1)}${match.locator.sourceFile}:${match.locator.sourceCursor}`;
+  return [line, locator];
+}
+
+function renderFileTouchMatch(match: FileTouchMatch, seqWidth: number, prefix: string): string[] {
+  const seq = `#${match.eventSeq}`.padEnd(seqWidth);
+  const path = match.sourcePath.replace(/\s+/g, " ");
+  const mark = multiplicityMarker(match.eventSeq, match.runLastSeq);
+  const copies = alsoInMarker(match.alsoIn);
+  return [
+    `${prefix}${seq} ${match.operation} ${path}  ${match.locator.sourceFile}:${match.locator.sourceCursor}${mark}${copies}`,
+  ];
+}
+
+/** A context line renders as context: unmarked text, distinctly unhighlighted. */
+function renderContextLine(event: ViewEvent, seqWidth: number): string {
+  const seq = `#${event.seq}`.padEnd(seqWidth);
+  const label = eventLabel(event.kind, event.role).padEnd(LABEL_WIDTH);
+  const timestamp = event.timestamp ?? "-";
+  const mark = multiplicityMarker(event.seq, event.runLastSeq);
+  return `  ${seq} ${label} ${timestamp}  ${lineText(event)}${mark}`;
+}
+
+function renderGroups<M extends { eventSeq: number; runLastSeq: number }>(
+  result: SearchResult<M>,
+  params: SearchParams,
+  contexts: Map<string, GroupContext>,
+  renderMatch: (match: M, seqWidth: number, prefix: string) => string[],
+  noun: string,
+): string {
+  const lines: string[] = [];
+  let shown = 0;
+  for (const group of result.groups) {
+    if (lines.length > 0) lines.push("");
+    lines.push(sessionHeader(group));
+    const groupContext = contexts.get(group.sessionId);
+    const contextEvents = groupContext?.events ?? [];
+    const seqWidth = Math.max(
+      ...group.matches.map((m) => `#${m.eventSeq}`.length),
+      ...contextEvents.map((e) => `#${e.seq}`.length),
+    );
+    // With context, matches carry a `»` mark so context lines read as
+    // context; without it, output keeps its exact unprefixed shape.
+    const matchPrefix = contextEvents.length > 0 || groupContext ? "» " : "  ";
+    const entries: { seq: number; render: () => string[] }[] = [];
+    for (const match of group.matches) {
+      entries.push({
+        seq: match.eventSeq,
+        render: () => renderMatch(match, seqWidth, matchPrefix),
+      });
+      shown += 1;
+    }
+    for (const event of contextEvents) {
+      entries.push({ seq: event.seq, render: () => [renderContextLine(event, seqWidth)] });
+    }
+    entries.sort((a, b) => a.seq - b.seq);
+    for (const entry of entries) lines.push(...entry.render());
+    const hidden = group.totalInSession - group.matches.length;
+    if (hidden > 0) {
+      const hint =
+        group.matches.length >= params.perSession ? " (raise --per-session to see them)" : "";
+      lines.push(
+        `  … ${hidden} more ${hidden === 1 ? "match" : "matches"} in this Session${hint}.`,
+      );
+    }
+  }
+  if (lines.length > 0) lines.push("");
+  if (result.totalMatches > shown) {
+    const hint = shown >= params.limit ? " (raise --limit to see more)" : "";
+    lines.push(`${shown} of ${result.totalMatches} ${noun} shown${hint}.`);
+  } else {
+    lines.push(`${result.totalMatches} ${noun}.`);
+  }
+  return lines.join("\n");
+}
+
+function sessionHeader(group: SessionMatchGroup<unknown>): string {
+  const parts = [group.sessionId, group.harnessId];
+  const range = dateRange(group.firstTimestamp, group.lastTimestamp);
+  if (range) parts.push(range);
+  if (group.continuationParent) parts.push(`(continues ${group.continuationParent})`);
+  const family = familyNote(group.sessionId, group.family);
+  if (family !== null) parts.push(family);
+  if (group.archiveState === "archived") parts.push("[archived]");
+  return parts.join("  ");
+}
+
+export function dateRange(first: string | null, last: string | null): string | null {
+  const from = first?.slice(0, 10) ?? null;
+  const to = last?.slice(0, 10) ?? null;
+  if (!from) return to;
+  if (!to || to === from) return from;
+  return `${from} → ${to}`;
+}
