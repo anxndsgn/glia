@@ -293,7 +293,10 @@ export interface CodexSessionSpec {
    * `parent_thread_id` when a parent is stated; `nestedKind` selects the
    * `{ other: … }` spelling over the plain string.
    */
-  subagent?: boolean | { kind: string; parentThreadId?: string; nestedKind?: boolean };
+  subagent?:
+    | boolean
+    | { kind: string; parentThreadId?: string; nestedKind?: boolean }
+    | { bare: true };
   extraLines?: unknown[];
 }
 
@@ -310,6 +313,10 @@ export async function writeCodexSession(
   if (spec.subagent === true) {
     meta["thread_source"] = "subagent";
     meta["source"] = { subagent: { other: "guardian" } };
+  } else if (spec.subagent && "bare" in spec.subagent) {
+    // The shape the adapter's predicate accepts but no local rollout
+    // happens to use: flagged a subagent, naming neither kind nor parent.
+    meta["thread_source"] = "subagent";
   } else if (spec.subagent) {
     const { kind, parentThreadId, nestedKind } = spec.subagent;
     meta["thread_source"] = "subagent";

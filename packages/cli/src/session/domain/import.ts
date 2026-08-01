@@ -13,6 +13,7 @@ import type { CapturedBundle, SessionCandidate } from "../adapters/types.ts";
 import { bundleDigest, manifestOf } from "../storage/bundle.ts";
 import {
   readSessionMeta,
+  SESSION_META_SCHEMA_VERSION,
   writeAcceptedRevision,
   type SessionMeta,
 } from "../storage/store-layout.ts";
@@ -505,7 +506,7 @@ function sessionMetaFor(item: StagedCandidate, fileCount: number): SessionMeta {
   return {
     ...override,
     ...tombstoneOverride,
-    schemaVersion: 1,
+    schemaVersion: SESSION_META_SCHEMA_VERSION,
     sessionId: candidate.candidateId,
     harnessId: candidate.identity.harnessId,
     sourceSessionId: candidate.identity.sourceSessionId,

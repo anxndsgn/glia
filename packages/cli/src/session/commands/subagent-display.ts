@@ -1,5 +1,5 @@
-import { shortSubagentId, subagentIdOf, isSubagentBundlePath } from "../adapters/subagent.ts";
-import type { SubagentColumns } from "../projection/query.ts";
+import { shortSubagentId } from "../adapters/subagent.ts";
+import type { SubagentColumns, SubagentEvidence } from "../projection/query.ts";
 
 /**
  * The subagent note of the collection surfaces; null when a Session neither
@@ -17,12 +17,12 @@ export function subagentNote(session: SubagentColumns): string | null {
 }
 
 /**
- * A subagent rollout that names no parent is still a subagent — Codex
- * stated the relation without stating the other end, and older rollouts
- * carry no parent link at all.
+ * A subagent rollout that names neither a kind nor a parent is still a
+ * subagent: the source stated the relation without stating either end, so
+ * presence is its own column rather than inferred from the other two.
  */
 function isSubagent(session: SubagentColumns): boolean {
-  return session.subagentKind !== null || session.subagentParent !== null;
+  return session.subagentOrigin !== 0;
 }
 
 function kindSuffix(session: SubagentColumns): string {
@@ -45,14 +45,11 @@ function parentName(session: SubagentColumns): string {
  * still identifies which invocation, since a Session may spawn several of
  * the same type.
  */
-export function subagentMatchMarker(evidence: {
-  locator: { sourceFile: string };
-  subagentType: string | null;
-}): string {
-  const { sourceFile } = evidence.locator;
-  if (!isSubagentBundlePath(sourceFile)) return "";
-  const id = shortSubagentId(subagentIdOf(sourceFile));
-  return evidence.subagentType === null
-    ? ` subagent ${id}`
+export function subagentMatchMarker(evidence: SubagentEvidence): string {
+  if (evidence.subagentId === null) return "";
+  const id = evidence.subagentId === "" ? null : shortSubagentId(evidence.subagentId);
+  if (evidence.subagentType === null) return id === null ? " subagent" : ` subagent ${id}`;
+  return id === null
+    ? ` subagent ${evidence.subagentType}`
     : ` subagent ${evidence.subagentType}(${id})`;
 }

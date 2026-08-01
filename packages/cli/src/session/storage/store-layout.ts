@@ -5,7 +5,16 @@ import type { HarnessId } from "../../core/harnesses/ids.ts";
 import { GliaError } from "../../core/output/errors.ts";
 import { requireSupportedSchemaVersion } from "../../core/state/schema-version.ts";
 
-export const SESSION_META_SCHEMA_VERSION = 1;
+/**
+ * Bumped to 2 when Sessions gained subagent evidence. The read side alone
+ * would have tolerated version 1 — the new field is optional and an older
+ * reader ignores it — but the write side would not: an older CLI captures
+ * only the main transcript, computes a different Revision digest, and
+ * replaces the stored Revision without the subagent files. Silent evidence
+ * loss is exactly what this constant exists to prevent, so older CLIs must
+ * stop at STATE_TOO_NEW rather than write.
+ */
+export const SESSION_META_SCHEMA_VERSION = 2;
 
 /**
  * The Session module's namespaced layout inside the private Store worktree:
@@ -30,9 +39,8 @@ export interface SessionMeta {
   continuation: { parentSessionId: string } | null;
   /**
    * Present when the source marks this Session as a Harness-spawned
-   * subagent. Optional and additive: `SESSION_META_SCHEMA_VERSION` stays 1
-   * because a reader that predates the field parses the Session fine and
-   * merely projects it without subagent badges.
+   * subagent. Its presence is itself the fact: a subagent whose kind and
+   * parent are both unstated is still a subagent.
    */
   subagent?: SubagentOrigin;
   currentRevision: {

@@ -10,6 +10,11 @@ import { showCommand } from "../../src/session/commands/show.ts";
 import { viewCommand } from "../../src/session/commands/view.ts";
 import type { CommandRunContext, LoadedProject } from "../../src/core/session-module.ts";
 import {
+  readSessionMeta,
+  SESSION_META_SCHEMA_VERSION,
+} from "../../src/session/storage/store-layout.ts";
+import { requireSupportedSchemaVersion } from "../../src/core/state/schema-version.ts";
+import {
   initProject,
   makeTestEnv,
   writeClaudeSession,
@@ -167,6 +172,7 @@ describe("subagent lifecycle across the command surface", () => {
 
     const session = (outcome.json as { session: Record<string, unknown> }).session;
     expect(session["subagent"]).toEqual({
+      isSubagent: true,
       kind: "review",
       parentSourceSessionId: CODEX_PARENT,
       parentSessionId: codexParentId,
@@ -223,6 +229,88 @@ describe("subagent lifecycle across the command surface", () => {
       subagent: unknown;
     };
     expect(plainDoc.subagent).toBeNull();
+  });
+
+  test("a Store carrying subagent evidence stops an older writer", async () => {
+    // The read side alone would tolerate the new field; the write side
+    // would not, so the constant moved rather than staying additive.
+    expect(SESSION_META_SCHEMA_VERSION).toBe(2);
+    const meta = await readSessionMeta(project.paths.storeDir, ccParentId);
+    expect(meta?.schemaVersion).toBe(2);
+    // A CLI that predates subagent evidence supports version 1 and must
+    // refuse rather than re-capture the Session without its subagent files.
+    expect(() =>
+      requireSupportedSchemaVersion("Session metadata", "session.json", meta?.schemaVersion, 1),
+    ).toThrow(expect.objectContaining({ code: "STATE_TOO_NEW" }));
+  });
+
+  test("a subagent stating neither kind nor parent keeps its relation", async () => {
+    await writeCodexSession(env.codexHome, {
+      sessionId: "44444444-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      userText: "a bare subagent thread",
+      agentText: "its answer",
+      subagent: { bare: true },
+    });
+    await importAll();
+    const bareId = sessionIdOf({
+      harnessId: "codex",
+      sourceSessionId: "44444444-2222-3333-4444-555555555555",
+    });
+
+    const shown = await showCommand.run(ctx, [bareId], {});
+    // Neither kind nor parent is stated, so neither column can carry the
+    // fact that the source called this a subagent at all.
+    expect(shown.human ?? "").toContain("subagent: subagent of parent unknown");
+    expect((shown.json as { session: Record<string, unknown> }).session["subagent"]).toMatchObject({
+      isSubagent: true,
+      kind: null,
+      parentSourceSessionId: null,
+    });
+  });
+
+  test("the subagent filter reaches inline sidechain records in older transcripts", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "cc-inline",
+      cwd: env.worktree,
+      userText: "the human's own request",
+      extraLines: [
+        {
+          type: "user",
+          uuid: "inline-u1",
+          sessionId: "cc-inline",
+          agentId: "legacy-9999",
+          isSidechain: true,
+          timestamp: "2026-07-15T10:00:30Z",
+          message: { role: "user", content: "INLINEPROBE legacy sidechain prompt" },
+        },
+        {
+          type: "user",
+          uuid: "inline-u2",
+          sessionId: "cc-inline",
+          isSidechain: true,
+          timestamp: "2026-07-15T10:00:31Z",
+          message: { role: "user", content: "INLINEPROBE unnamed sidechain prompt" },
+        },
+      ],
+    });
+    await importAll();
+
+    // These records live in the main transcript, so a path-based slice
+    // would miss them entirely.
+    const only = await searchCommand.run(ctx, ["INLINEPROBE"], { filter: ["subagent"] });
+    const json = only.json as {
+      totalMatches: number;
+      matches: { locator: { sourceFile: string } }[];
+    };
+    expect(json.totalMatches).toBe(2);
+    expect(
+      json.matches.every((m) => m.locator.sourceFile === "source/transcript.jsonl"),
+    ).toBeTrue();
+    // Named and unnamed inline evidence both badge; only the named one has
+    // an id to show.
+    expect(only.human ?? "").toContain("subagent legacy");
+    expect(only.human ?? "").toMatch(/subagent(?! legacy)\s*$/m);
   });
 
   test("a subagent spawn prompt never becomes the parent's label", async () => {

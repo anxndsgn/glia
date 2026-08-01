@@ -148,6 +148,9 @@ function sessionHeaderJson(session: SessionRow, sourceFiles: string[], spawned: 
 /** The Session's subagent facts, in both directions of the relation. */
 export function subagentJson(session: SubagentColumns, spawned: string[]): object {
   return {
+    // Presence is its own fact: kind and parent are both optional, so a
+    // consumer cannot read their nulls as "not a subagent".
+    isSubagent: session.subagentOrigin !== 0,
     kind: session.subagentKind,
     parentSourceSessionId: session.subagentParent,
     parentSessionId: session.subagentParentSession,

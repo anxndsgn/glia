@@ -236,9 +236,10 @@ function eventPayload(
   const payload: Record<string, unknown> = {};
   if (title) payload[LABEL_PAYLOAD_KEY] = title.source;
   if (harnessInjected) payload[META_PAYLOAD_KEY] = true;
-  // The empty string marks a legacy inline sidechain line that names no
-  // agent; the marker still belongs on the event, the id is simply absent.
-  if (subagentId) payload[SUBAGENT_PAYLOAD_KEY] = subagentId;
+  // Written whenever the event is subagent evidence, including the empty
+  // string a legacy inline sidechain line with no `agentId` yields: the
+  // key's presence is the provenance fact, its value only names the agent.
+  if (subagentId !== null) payload[SUBAGENT_PAYLOAD_KEY] = subagentId;
   if (subagentType) payload[SUBAGENT_TYPE_PAYLOAD_KEY] = subagentType;
   return Object.keys(payload).length > 0 ? payload : null;
 }

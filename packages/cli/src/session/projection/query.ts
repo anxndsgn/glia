@@ -44,6 +44,11 @@ export interface SessionRow extends SubagentColumns {
  * own evidence (Claude Code, so `subagentCount` is above zero).
  */
 export interface SubagentColumns {
+  /**
+   * Whether the source marked this Session a subagent. Kind and parent are
+   * both optional, so neither can stand in for the fact itself.
+   */
+  subagentOrigin: number;
   /** Source-native subagent kind when this Session is a subagent. */
   subagentKind: string | null;
   /**
@@ -64,6 +69,13 @@ export interface SubagentColumns {
  * than only identify it.
  */
 export interface SubagentEvidence {
+  /**
+   * The subagent that produced this event; null when it is not subagent
+   * evidence at all. The empty string is a subagent whose agent the source
+   * did not name, which is still subagent evidence.
+   */
+  subagentId: string | null;
+  /** Source-native agent type, when a sidecar named one. */
   subagentType: string | null;
 }
 
@@ -167,7 +179,8 @@ function subagentColumns(prefix: string): string {
   // must be named explicitly: unqualified columns inside it would bind to
   // the inner table and silently resolve every parent to null.
   const outer = prefix === "" ? "sessions." : prefix;
-  return `${outer}subagent_kind AS subagentKind, ${outer}subagent_parent AS subagentParent,
+  return `${outer}subagent_origin AS subagentOrigin,
+    ${outer}subagent_kind AS subagentKind, ${outer}subagent_parent AS subagentParent,
     ${outer}subagent_count AS subagentCount,
     (SELECT p.session_id FROM sessions p
       WHERE p.source_session_id = ${outer}subagent_parent
@@ -332,20 +345,21 @@ function filterClause(filter: EventFilter, index: number, bind: Bindings): strin
       return `(e.kind = 'tool_call' AND EXISTS (
         SELECT 1 FROM event_tool_names n WHERE n.event_id = e.event_id AND n.name_folded = ${key}))`;
     }
-    case "subagent": {
-      // Provenance is already in the locator every event carries, so the
-      // slice needs no column of its own.
-      const key = `$filterSubagent${index}`;
-      bind[key] = `${SUBAGENT_BUNDLE_PREFIX}%`;
-      return `e.source_file LIKE ${key}`;
-    }
+    case "subagent":
+      // The adapter marks every subagent event as it projects it, so the
+      // slice reads that marker rather than the bundle path: transcripts
+      // older than the sibling-directory layout carry their sidechain
+      // records inline in the main transcript and are subagent evidence
+      // just the same.
+      return `json_extract(e.payload_json, '$.subagentId') IS NOT NULL`;
   }
 }
 
 /** The Session-identity and event-identity columns every matched row carries. */
 interface MatchedRow extends SubagentColumns {
-  /** Subagent type of the transcript this event came from; null otherwise. */
+  /** Subagent provenance of this event; see `SubagentEvidence`. */
   subagentType: string | null;
+  subagentId: string | null;
   sessionId: string;
   revisionDigest: string;
   harnessId: string;
@@ -540,6 +554,7 @@ function toGroup<M>(
     lastTimestamp: first.lastTimestamp,
     continuationParent: first.continuationParent,
     archiveState: first.archiveState,
+    subagentOrigin: first.subagentOrigin,
     subagentKind: first.subagentKind,
     subagentParent: first.subagentParent,
     subagentParentSession: first.subagentParentSession,
@@ -653,6 +668,7 @@ export function searchText(db: Database, params: SearchParams): SearchResult<Tex
        e.source_file AS sourceFile, e.source_cursor AS sourceCursor,
        e.source_event_id AS sourceEventId, e.identity_key AS identityKey,
        json_extract(e.payload_json, '$.subagentType') AS subagentType,
+       json_extract(e.payload_json, '$.subagentId') AS subagentId,
        ${rank} AS rank
      ${from}
      WHERE ${where}`;
@@ -665,6 +681,7 @@ export function searchText(db: Database, params: SearchParams): SearchResult<Tex
     excerpt: renderExcerpt(row.text, terms),
     locator: locatorOf(row),
     subagentType: row.subagentType,
+    subagentId: row.subagentId,
   });
 
   const familyRows = listFamilyRows(db);
@@ -714,6 +731,7 @@ export function searchFileTouches(
        e.source_file AS sourceFile, e.source_cursor AS sourceCursor,
        e.source_event_id AS sourceEventId, e.identity_key AS identityKey,
        json_extract(e.payload_json, '$.subagentType') AS subagentType,
+       json_extract(e.payload_json, '$.subagentId') AS subagentId,
        0 AS rank
      ${from}
      WHERE ${where}`;
@@ -725,6 +743,7 @@ export function searchFileTouches(
     normalizedPath: row.normalizedPath,
     locator: locatorOf(row),
     subagentType: row.subagentType,
+    subagentId: row.subagentId,
   });
 
   const familyRows = listFamilyRows(db);
@@ -786,6 +805,7 @@ interface ViewEventRow {
   sourceCursor: string;
   sourceEventId: string | null;
   subagentType: string | null;
+  subagentId: string | null;
 }
 
 const VIEW_EVENT_COLUMNS = `e.event_id AS eventId, e.seq AS seq,
@@ -793,7 +813,8 @@ const VIEW_EVENT_COLUMNS = `e.event_id AS eventId, e.seq AS seq,
   e.kind AS kind, e.role AS role,
   e.timestamp AS timestamp, e.text AS text, e.source_file AS sourceFile,
   e.source_cursor AS sourceCursor, e.source_event_id AS sourceEventId,
-  json_extract(e.payload_json, '$.subagentType') AS subagentType`;
+  json_extract(e.payload_json, '$.subagentType') AS subagentType,
+  json_extract(e.payload_json, '$.subagentId') AS subagentId`;
 
 /**
  * One Session's event timeline in source (`seq`) order — never re-ranked.
@@ -953,6 +974,7 @@ function shapeViewEvents(db: Database, rows: ViewEventRow[]): ViewEvent[] {
     toolNames: names.get(row.eventId) ?? [],
     locator: locatorOf(row),
     subagentType: row.subagentType,
+    subagentId: row.subagentId,
   }));
 }
 

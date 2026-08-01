@@ -43,6 +43,10 @@ export function createProjectionSchema(db: Database): void {
       -- The parent is the parent's source Session ID, resolved to a Session
       -- ID at query time only when that parent is itself imported; NULL
       -- means the source stated none, never that one was guessed.
+      -- Whether the source marked this Session a subagent at all. Kind and
+      -- parent are both optional, so their NULLs cannot carry the fact: a
+      -- rollout stating only thread_source=subagent is still a subagent.
+      subagent_origin INTEGER NOT NULL DEFAULT 0,
       subagent_kind TEXT,
       subagent_parent TEXT,
       subagent_count INTEGER NOT NULL DEFAULT 0

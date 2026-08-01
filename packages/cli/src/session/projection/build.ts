@@ -39,8 +39,8 @@ export async function buildProjection(
          (session_id, harness_id, source_session_id, opening_path, association_mode,
           continuation_parent, revision_digest, accepted_at, archive_state, event_count,
           first_timestamp, last_timestamp, label, label_source, label_seq,
-          subagent_kind, subagent_parent, subagent_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          subagent_origin, subagent_kind, subagent_parent, subagent_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const insertEvent = db.prepare(
       `INSERT INTO events
@@ -161,6 +161,7 @@ export async function buildProjection(
         label?.text ?? null,
         label?.source ?? null,
         label?.seq ?? null,
+        meta.subagent ? 1 : 0,
         meta.subagent?.kind ?? null,
         meta.subagent?.parentSourceSessionId ?? null,
         subagentTranscriptCount(bundle),
