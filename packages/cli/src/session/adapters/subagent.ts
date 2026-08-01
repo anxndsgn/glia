@@ -13,13 +13,34 @@ export const SUBAGENT_BUNDLE_PREFIX = "source/subagents/";
 /** The `payload` key carrying the subagent an event's evidence came from. */
 export const SUBAGENT_PAYLOAD_KEY = "subagentId";
 
+/**
+ * The `payload` key carrying the source-native subagent type (Claude Code's
+ * `agentType`, e.g. `Explore`), read from the sidecar beside the transcript.
+ */
+export const SUBAGENT_TYPE_PAYLOAD_KEY = "subagentType";
+
 export function isSubagentBundlePath(path: string): boolean {
   return path.startsWith(SUBAGENT_BUNDLE_PREFIX);
+}
+
+/** A subagent transcript, as opposed to the sidecar sitting beside it. */
+export function isSubagentTranscriptPath(path: string): boolean {
+  return isSubagentBundlePath(path) && path.endsWith(".jsonl");
 }
 
 /** `source/subagents/agent-<agentId>.jsonl` → `<agentId>`. */
 export function subagentIdOf(bundlePath: string): string {
   return basename(bundlePath, ".jsonl").replace(/^agent-/, "");
+}
+
+/**
+ * The sidecar Claude Code writes beside a subagent transcript, holding what
+ * the transcript itself never states: the agent's type, the parent's
+ * description of the work, and the `toolUseId` anchoring it to the exact
+ * Task call in the parent transcript that spawned it.
+ */
+export function subagentSidecarPathFor(transcriptBundlePath: string): string {
+  return transcriptBundlePath.replace(/\.jsonl$/, ".meta.json");
 }
 
 /**

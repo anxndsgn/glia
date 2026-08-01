@@ -227,7 +227,7 @@ function renderEventLine(event: ViewEvent, seqWidth: number): string {
   const mark = multiplicityMarker(event.runFirstSeq, event.runLastSeq);
   // Which subagent contributed the event, so a timeline mixing the parent's
   // own evidence with its subagents' stays attributable.
-  const from = subagentMatchMarker(event.locator.sourceFile);
+  const from = subagentMatchMarker(event);
   return `  ${seq} ${label} ${timestamp}  ${names}${lineText(event)}${mark}${from}`;
 }
 

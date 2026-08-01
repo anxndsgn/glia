@@ -307,7 +307,7 @@ function renderTextMatch(match: TextMatch, seqWidth: number, prefix: string): st
   const line = `${prefix}${seq} ${label} ${timestamp}  ${match.excerpt}${mark}${copies}`;
   // The locator already names the subagent transcript; the marker says so
   // in the vocabulary the reader filters by.
-  const from = subagentMatchMarker(match.locator.sourceFile);
+  const from = subagentMatchMarker(match);
   const locator = `${" ".repeat(2 + seqWidth + 1)}${match.locator.sourceFile}:${match.locator.sourceCursor}${from}`;
   return [line, locator];
 }
@@ -317,7 +317,7 @@ function renderFileTouchMatch(match: FileTouchMatch, seqWidth: number, prefix: s
   const path = match.sourcePath.replace(/\s+/g, " ");
   const mark = multiplicityMarker(match.eventSeq, match.runLastSeq);
   const copies = alsoInMarker(match.alsoIn);
-  const from = subagentMatchMarker(match.locator.sourceFile);
+  const from = subagentMatchMarker(match);
   return [
     `${prefix}${seq} ${match.operation} ${path}  ${match.locator.sourceFile}:${match.locator.sourceCursor}${from}${mark}${copies}`,
   ];

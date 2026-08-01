@@ -39,8 +39,20 @@ function parentName(session: SubagentColumns): string {
   return session.subagentParentSession ?? session.subagentParent ?? "parent unknown";
 }
 
-/** The per-match marker for evidence a subagent transcript contributed. */
-export function subagentMatchMarker(sourceFile: string): string {
+/**
+ * The per-match marker for evidence a subagent transcript contributed. The
+ * agent's source-native type names it when the sidecar stated one; the id
+ * still identifies which invocation, since a Session may spawn several of
+ * the same type.
+ */
+export function subagentMatchMarker(evidence: {
+  locator: { sourceFile: string };
+  subagentType: string | null;
+}): string {
+  const { sourceFile } = evidence.locator;
   if (!isSubagentBundlePath(sourceFile)) return "";
-  return ` subagent ${shortSubagentId(subagentIdOf(sourceFile))}`;
+  const id = shortSubagentId(subagentIdOf(sourceFile));
+  return evidence.subagentType === null
+    ? ` subagent ${id}`
+    : ` subagent ${evidence.subagentType}(${id})`;
 }

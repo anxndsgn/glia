@@ -57,6 +57,16 @@ export interface SubagentColumns {
   subagentCount: number;
 }
 
+/**
+ * What an event says about the subagent that produced it. The transcript it
+ * came from is already in the locator; this adds the source-native type
+ * Claude Code records in the sidecar, so a badge can name the agent rather
+ * than only identify it.
+ */
+export interface SubagentEvidence {
+  subagentType: string | null;
+}
+
 export interface EvidenceLocator {
   sourceFile: string;
   sourceCursor: string;
@@ -84,7 +94,7 @@ export interface SearchParams {
   includeArchived: boolean;
 }
 
-export interface TextMatch {
+export interface TextMatch extends SubagentEvidence {
   eventSeq: number;
   /** Last member sequence of the match's duplicate run; equals eventSeq for a singleton. */
   runLastSeq: number;
@@ -97,7 +107,7 @@ export interface TextMatch {
   alsoIn?: string[];
 }
 
-export interface FileTouchMatch {
+export interface FileTouchMatch extends SubagentEvidence {
   eventSeq: number;
   /** Last member sequence of the match's duplicate run; equals eventSeq for a singleton. */
   runLastSeq: number;
@@ -334,6 +344,8 @@ function filterClause(filter: EventFilter, index: number, bind: Bindings): strin
 
 /** The Session-identity and event-identity columns every matched row carries. */
 interface MatchedRow extends SubagentColumns {
+  /** Subagent type of the transcript this event came from; null otherwise. */
+  subagentType: string | null;
   sessionId: string;
   revisionDigest: string;
   harnessId: string;
@@ -640,6 +652,7 @@ export function searchText(db: Database, params: SearchParams): SearchResult<Tex
        e.kind AS eventKind, e.role AS role, e.timestamp AS timestamp, e.text AS text,
        e.source_file AS sourceFile, e.source_cursor AS sourceCursor,
        e.source_event_id AS sourceEventId, e.identity_key AS identityKey,
+       json_extract(e.payload_json, '$.subagentType') AS subagentType,
        ${rank} AS rank
      ${from}
      WHERE ${where}`;
@@ -651,6 +664,7 @@ export function searchText(db: Database, params: SearchParams): SearchResult<Tex
     timestamp: row.timestamp,
     excerpt: renderExcerpt(row.text, terms),
     locator: locatorOf(row),
+    subagentType: row.subagentType,
   });
 
   const familyRows = listFamilyRows(db);
@@ -699,6 +713,7 @@ export function searchFileTouches(
        t.source_path AS sourcePath, t.normalized_path AS normalizedPath,
        e.source_file AS sourceFile, e.source_cursor AS sourceCursor,
        e.source_event_id AS sourceEventId, e.identity_key AS identityKey,
+       json_extract(e.payload_json, '$.subagentType') AS subagentType,
        0 AS rank
      ${from}
      WHERE ${where}`;
@@ -709,6 +724,7 @@ export function searchFileTouches(
     sourcePath: row.sourcePath,
     normalizedPath: row.normalizedPath,
     locator: locatorOf(row),
+    subagentType: row.subagentType,
   });
 
   const familyRows = listFamilyRows(db);
@@ -732,7 +748,7 @@ export type ViewWindow =
   | { mode: "range"; from: number | null; limit: number | null }
   | { mode: "tail"; count: number };
 
-export interface ViewEvent {
+export interface ViewEvent extends SubagentEvidence {
   seq: number;
   /** The event's duplicate-run bounds; a singleton has runFirstSeq === runLastSeq === seq. */
   runFirstSeq: number;
@@ -769,13 +785,15 @@ interface ViewEventRow {
   sourceFile: string;
   sourceCursor: string;
   sourceEventId: string | null;
+  subagentType: string | null;
 }
 
 const VIEW_EVENT_COLUMNS = `e.event_id AS eventId, e.seq AS seq,
   e.run_first_seq AS runFirstSeq, e.run_last_seq AS runLastSeq,
   e.kind AS kind, e.role AS role,
   e.timestamp AS timestamp, e.text AS text, e.source_file AS sourceFile,
-  e.source_cursor AS sourceCursor, e.source_event_id AS sourceEventId`;
+  e.source_cursor AS sourceCursor, e.source_event_id AS sourceEventId,
+  json_extract(e.payload_json, '$.subagentType') AS subagentType`;
 
 /**
  * One Session's event timeline in source (`seq`) order — never re-ranked.
@@ -934,6 +952,7 @@ function shapeViewEvents(db: Database, rows: ViewEventRow[]): ViewEvent[] {
     text: row.text,
     toolNames: names.get(row.eventId) ?? [],
     locator: locatorOf(row),
+    subagentType: row.subagentType,
   }));
 }
 

@@ -144,6 +144,11 @@ export interface ClaudeSubagentSpec {
   /** Extra records appended after the harness-authored spawn prompt. */
   lines?: unknown[];
   spawnPrompt?: string;
+  /**
+   * The `agent-<id>.meta.json` sidecar Claude Code writes beside the
+   * transcript. Omit to model an older transcript that has none.
+   */
+  meta?: { agentType?: string; description?: string; toolUseId?: string; spawnDepth?: number };
 }
 
 export interface ClaudeSessionSpec {
@@ -259,6 +264,18 @@ export async function writeClaudeSubagent(
   ];
   const path = join(dir, `agent-${subagent.agentId}.jsonl`);
   await Bun.write(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  if (subagent.meta !== undefined) {
+    await Bun.write(
+      join(dir, `agent-${subagent.agentId}.meta.json`),
+      JSON.stringify({
+        agentType: "Explore",
+        description: "map the retry helpers",
+        toolUseId: `toolu_${subagent.agentId}`,
+        spawnDepth: 1,
+        ...subagent.meta,
+      }),
+    );
+  }
   return path;
 }
 

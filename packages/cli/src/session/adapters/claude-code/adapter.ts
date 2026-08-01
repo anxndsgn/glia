@@ -5,10 +5,12 @@ import { asObject, asString, readJsonlLines } from "../jsonl.ts";
 import { LABEL_PAYLOAD_KEY, META_PAYLOAD_KEY, sessionLabel } from "../label.ts";
 import { captureAllowlisted, directoryExists, touch } from "../capture.ts";
 import {
-  isSubagentBundlePath,
+  isSubagentTranscriptPath,
   subagentIdOf,
+  subagentSidecarPathFor,
   SUBAGENT_BUNDLE_PREFIX,
   SUBAGENT_PAYLOAD_KEY,
+  SUBAGENT_TYPE_PAYLOAD_KEY,
 } from "../subagent.ts";
 import { candidateIdOf } from "../../domain/identity.ts";
 import { projected } from "../types.ts";
@@ -152,9 +154,11 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
     // The main transcript first, then each subagent transcript in manifest
     // path order, so a Session's evidence reads parent-before-children and
     // one bundle always projects in the same order.
-    yield* projectFile(bundle, TRANSCRIPT_BUNDLE_PATH, null);
+    yield* projectFile(bundle, TRANSCRIPT_BUNDLE_PATH, null, null);
     for (const path of subagentBundlePaths(bundle)) {
-      yield* projectFile(bundle, path, subagentIdOf(path));
+      // The sidecar is metadata about the transcript, not evidence of its
+      // own: it names the agent, it never becomes an event.
+      yield* projectFile(bundle, path, subagentIdOf(path), await subagentTypeOf(bundle, path));
     }
   },
 };
@@ -167,7 +171,7 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
 function subagentBundlePaths(bundle: StoredSourceBundle): string[] {
   return bundle.manifest.files
     .map((file) => file.path)
-    .filter(isSubagentBundlePath)
+    .filter(isSubagentTranscriptPath)
     .sort();
 }
 
@@ -181,6 +185,7 @@ async function* projectFile(
   bundle: StoredSourceBundle,
   bundlePath: string,
   subagentId: string | null,
+  subagentType: string | null,
 ): AsyncIterable<NormalizedEvent> {
   const lines = await readJsonlLines(join(bundle.dir, bundlePath));
   for (const line of lines) {
@@ -215,7 +220,7 @@ async function* projectFile(
       // source-provided evidence, and dropping it lost the one readable
       // name the Session has.
       text: title?.text ?? extractText(message),
-      payload: eventPayload(title, harnessInjected, inlineSubagentId),
+      payload: eventPayload(title, harnessInjected, inlineSubagentId, subagentType),
       toolNames: kind === "tool_call" ? extractToolNames(message) : [],
       fileTouches: extractFileTouches(value, message),
     };
@@ -226,6 +231,7 @@ function eventPayload(
   title: { source: "custom_title" | "ai_title" | "summary" } | null,
   harnessInjected: boolean,
   subagentId: string | null,
+  subagentType: string | null,
 ): Record<string, unknown> | null {
   const payload: Record<string, unknown> = {};
   if (title) payload[LABEL_PAYLOAD_KEY] = title.source;
@@ -233,6 +239,7 @@ function eventPayload(
   // The empty string marks a legacy inline sidechain line that names no
   // agent; the marker still belongs on the event, the id is simply absent.
   if (subagentId) payload[SUBAGENT_PAYLOAD_KEY] = subagentId;
+  if (subagentType) payload[SUBAGENT_TYPE_PAYLOAD_KEY] = subagentType;
   return Object.keys(payload).length > 0 ? payload : null;
 }
 
@@ -245,12 +252,48 @@ function eventPayload(
 async function subagentSourceFiles(sessionSubdir: string): Promise<SourceFileRef[]> {
   const dir = join(sessionSubdir, "subagents");
   if (!(await directoryExists(dir))) return [];
-  const names = (await readdir(dir)).filter((f) => f.startsWith("agent-") && f.endsWith(".jsonl"));
-  return names.sort().map((name) => ({
-    absolutePath: join(dir, name),
-    bundlePath: `${SUBAGENT_BUNDLE_PREFIX}${name}`,
-    mediaType: "application/jsonl",
-  }));
+  const present = new Set(await readdir(dir));
+  const files: SourceFileRef[] = [];
+  for (const name of [...present].filter(isSubagentTranscriptName).sort()) {
+    files.push({
+      absolutePath: join(dir, name),
+      bundlePath: `${SUBAGENT_BUNDLE_PREFIX}${name}`,
+      mediaType: "application/jsonl",
+    });
+    // The sidecar is optional: transcripts written before Claude Code
+    // wrote one are captured alone rather than failing the Candidate.
+    const sidecar = name.replace(/\.jsonl$/, ".meta.json");
+    if (!present.has(sidecar)) continue;
+    files.push({
+      absolutePath: join(dir, sidecar),
+      bundlePath: `${SUBAGENT_BUNDLE_PREFIX}${sidecar}`,
+      mediaType: "application/json",
+    });
+  }
+  return files;
+}
+
+function isSubagentTranscriptName(name: string): boolean {
+  return name.startsWith("agent-") && name.endsWith(".jsonl");
+}
+
+/**
+ * The subagent's type as its sidecar states it, or null when the sidecar is
+ * absent or unreadable. A malformed sidecar degrades the badge to the bare
+ * agent id; it never fails the projection of real transcript evidence.
+ */
+async function subagentTypeOf(
+  bundle: StoredSourceBundle,
+  bundlePath: string,
+): Promise<string | null> {
+  const sidecar = subagentSidecarPathFor(bundlePath);
+  if (!bundle.manifest.files.some((file) => file.path === sidecar)) return null;
+  try {
+    const parsed = asObject(JSON.parse(await Bun.file(join(bundle.dir, sidecar)).text()));
+    return parsed ? asString(parsed["agentType"]) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

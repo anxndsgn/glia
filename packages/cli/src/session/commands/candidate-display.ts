@@ -1,5 +1,5 @@
 import type { SessionCandidate } from "../adapters/types.ts";
-import { isSubagentBundlePath } from "../adapters/subagent.ts";
+import { isSubagentTranscriptPath } from "../adapters/subagent.ts";
 
 /** Width of the `MM-DD HH:mm` column, for padding rows with no time. */
 export const SHORT_TIME_WIDTH = 11;
@@ -38,7 +38,7 @@ export function candidateSubagentNote(candidate: SessionCandidate): string {
     return `  subagent${kind}`;
   }
   const count = candidate.sourceFiles.filter((file) =>
-    isSubagentBundlePath(file.bundlePath),
+    isSubagentTranscriptPath(file.bundlePath),
   ).length;
   if (count === 0) return "";
   return `  +${count} subagent transcript${count === 1 ? "" : "s"}`;

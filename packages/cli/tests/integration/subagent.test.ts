@@ -44,6 +44,7 @@ beforeAll(async () => {
       {
         agentId: "alpha-1111",
         spawnPrompt: "SUBPROBE find every retry helper",
+        meta: { agentType: "Explore" },
         lines: [
           {
             type: "assistant",
@@ -128,7 +129,7 @@ describe("subagent lifecycle across the command surface", () => {
     const allJson = all.json as { totalMatches: number };
     // Both the Claude Code subagent transcript and the Codex subagent rollout.
     expect(allJson.totalMatches).toBe(2);
-    expect(all.human ?? "").toContain("subagent alpha");
+    expect(all.human ?? "").toContain("subagent Explore(alpha)");
 
     const only = await searchCommand.run(ctx, ["SUBPROBE"], { filter: ["subagent"] });
     const onlyJson = only.json as {
@@ -148,7 +149,8 @@ describe("subagent lifecycle across the command surface", () => {
     expect(parentHuman).toContain("1 subagent");
     expect(parentHuman).toContain("source/subagents/agent-alpha-1111.jsonl");
     // Subagent tool traffic is part of the parent's readable timeline.
-    expect(parentHuman).toContain("subagent alpha");
+    // The sidecar's agentType names the agent; the id says which invocation.
+    expect(parentHuman).toContain("subagent Explore(alpha)");
     expect(parentHuman).toContain("Read");
 
     // The Codex parent names the Sessions it spawned.
@@ -192,12 +194,35 @@ describe("subagent lifecycle across the command surface", () => {
     const doc = JSON.parse(await Bun.file(join(output, "session.json")).text()) as {
       files: { path: string }[];
     };
-    expect(doc.files.map((f) => f.path)).toContain("source/subagents/agent-alpha-1111.jsonl");
+    expect(doc.files.map((f) => f.path)).toEqual(
+      expect.arrayContaining([
+        "source/subagents/agent-alpha-1111.jsonl",
+        "source/subagents/agent-alpha-1111.meta.json",
+      ]),
+    );
     // The bytes travel with the export, not just the manifest entry.
     const exported = await Bun.file(
       join(output, "source", "subagents", "agent-alpha-1111.jsonl"),
     ).text();
     expect(exported).toContain("SUBPROBE find every retry helper");
+  });
+
+  test("an exported subagent Session keeps its parent link", async () => {
+    const output = join(env.root, "codex-subagent-export");
+    await exportCommand.run(ctx, [codexChildId], { output });
+    const doc = JSON.parse(await Bun.file(join(output, "session.json")).text()) as {
+      subagent: { kind: string; parentSourceSessionId: string } | null;
+      continuation: unknown;
+    };
+    // Exported evidence stands alone: a subagent that lost its parent would not.
+    expect(doc.subagent).toEqual({ kind: "review", parentSourceSessionId: CODEX_PARENT });
+
+    const plain = join(env.root, "codex-parent-export");
+    await exportCommand.run(ctx, [codexParentId], { output: plain });
+    const plainDoc = JSON.parse(await Bun.file(join(plain, "session.json")).text()) as {
+      subagent: unknown;
+    };
+    expect(plainDoc.subagent).toBeNull();
   });
 
   test("a subagent spawn prompt never becomes the parent's label", async () => {

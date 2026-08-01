@@ -234,6 +234,51 @@ describe("claude-code adapter", () => {
     expect(labelable.map((e) => e.text)).toEqual(["the human's opening request"]);
   });
 
+  test("captures the sidecar beside its transcript and names the agent from it", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "meta-1",
+      cwd: env.worktree,
+      subagents: [{ agentId: "alpha", meta: { agentType: "Explore" } }],
+    });
+    const candidates = await discoverAll(claudeCodeAdapter);
+    expect(candidates[0]?.sourceFiles.map((f) => f.bundlePath)).toEqual([
+      "source/transcript.jsonl",
+      "source/subagents/agent-alpha.jsonl",
+      "source/subagents/agent-alpha.meta.json",
+    ]);
+    expect(
+      candidates[0]?.sourceFiles.find((f) => f.bundlePath.endsWith(".meta.json"))?.mediaType,
+    ).toBe("application/json");
+
+    const events = await projectAll(claudeCodeAdapter, candidates[0]!);
+    // The sidecar names the agent but is never itself projected as events.
+    expect(events.some((e) => e.sourceFile.endsWith(".meta.json"))).toBeFalse();
+    const sub = events.filter((e) => e.sourceFile === "source/subagents/agent-alpha.jsonl");
+    expect(sub).toHaveLength(1);
+    expect(sub[0]?.payload?.["subagentType"]).toBe("Explore");
+  });
+
+  test("a transcript with no sidecar, or an unreadable one, still projects", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "meta-2",
+      cwd: env.worktree,
+      subagents: [{ agentId: "alpha" }, { agentId: "beta", meta: {} }],
+    });
+    const dir = join(env.claudeHome, "projects", env.worktree.replaceAll("/", "-"));
+    await Bun.write(join(dir, "meta-2", "subagents", "agent-beta.meta.json"), "{ not json");
+
+    const candidates = await discoverAll(claudeCodeAdapter);
+    const events = await projectAll(claudeCodeAdapter, candidates[0]!);
+    const alpha = events.find((e) => e.sourceFile === "source/subagents/agent-alpha.jsonl");
+    const beta = events.find((e) => e.sourceFile === "source/subagents/agent-beta.jsonl");
+    // No sidecar at all, and a malformed one, both degrade to the bare id
+    // rather than failing the Session's real evidence.
+    expect(alpha?.payload?.["subagentId"]).toBe("alpha");
+    expect(alpha?.payload?.["subagentType"]).toBeUndefined();
+    expect(beta?.payload?.["subagentId"]).toBe("beta");
+    expect(beta?.payload?.["subagentType"]).toBeUndefined();
+  });
+
   test("marks a legacy inline sidechain line in the main transcript", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "subs-4",

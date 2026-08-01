@@ -9,7 +9,7 @@ import {
   type SessionLabelSource,
 } from "../adapters/label.ts";
 import type { NormalizedEvent, StoredSourceBundle } from "../adapters/types.ts";
-import { isSubagentBundlePath } from "../adapters/subagent.ts";
+import { isSubagentTranscriptPath } from "../adapters/subagent.ts";
 import { listSessionIds, readSessionMeta, readStoredBundle } from "../storage/store-layout.ts";
 import { createProjectionSchema, PROJECTION_VERSION } from "./schema.ts";
 import { listArchiveMarkers } from "../domain/archive.ts";
@@ -181,9 +181,13 @@ export async function buildProjection(
   db.close();
 }
 
-/** How many subagent transcripts the accepted Revision carries. */
+/**
+ * How many subagent transcripts the accepted Revision carries. Sidecars sit
+ * under the same prefix and describe a transcript rather than being one, so
+ * they must not inflate the count.
+ */
 function subagentTranscriptCount(bundle: StoredSourceBundle): number {
-  return bundle.manifest.files.filter((file) => isSubagentBundlePath(file.path)).length;
+  return bundle.manifest.files.filter((file) => isSubagentTranscriptPath(file.path)).length;
 }
 
 /**
