@@ -4,7 +4,7 @@ import type { Database } from "bun:sqlite";
  * Bump whenever adapter normalization or the projection schema changes,
  * so published projections rebuild even for an unchanged Store commit.
  */
-export const PROJECTION_VERSION = 1;
+export const PROJECTION_VERSION = 2;
 
 /**
  * The projection is a disposable normalized view. SQLite paths, tables,
@@ -36,7 +36,20 @@ export function createProjectionSchema(db: Database): void {
       -- evidence it came from.
       label TEXT,
       label_source TEXT,
-      label_seq INTEGER
+      label_seq INTEGER,
+      -- Subagent facts, read from source evidence. The first two describe
+      -- a Session that *is* a Harness-spawned subagent (Codex); the third
+      -- counts subagent transcripts a Session *carries* (Claude Code).
+      -- The parent is the parent's source Session ID, resolved to a Session
+      -- ID at query time only when that parent is itself imported; NULL
+      -- means the source stated none, never that one was guessed.
+      -- Whether the source marked this Session a subagent at all. Kind and
+      -- parent are both optional, so their NULLs cannot carry the fact: a
+      -- rollout stating only thread_source=subagent is still a subagent.
+      subagent_origin INTEGER NOT NULL DEFAULT 0,
+      subagent_kind TEXT,
+      subagent_parent TEXT,
+      subagent_count INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE events (
       event_id INTEGER PRIMARY KEY,

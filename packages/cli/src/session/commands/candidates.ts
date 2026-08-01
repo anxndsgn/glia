@@ -8,7 +8,11 @@ import type { ClassifiedCandidate } from "../domain/classify.ts";
 import type { PersistedEvaluation } from "../domain/secret-detection.ts";
 import { listArchiveMarkers } from "../domain/archive.ts";
 import { renderSuspectedHits } from "./render-secret-hits.ts";
-import { candidateDisplayLabel, shortSessionTime } from "./candidate-display.ts";
+import {
+  candidateDisplayLabel,
+  candidateSubagentNote,
+  shortSessionTime,
+} from "./candidate-display.ts";
 import { truncate } from "../../core/output/terminal.ts";
 
 const DEFAULT_LIMIT = 50;
@@ -165,7 +169,7 @@ export const candidatesCommand: CommandDefinition = {
       lines.push(
         `${statusOf(entry).padEnd(statusWidth)}  ${shortSessionTime(candidate.sessionTime)}  ` +
           `${truncate(candidateDisplayLabel(candidate), LABEL_WIDTH)}  ` +
-          `${candidate.candidateId}${archiveNote}`,
+          `${candidate.candidateId}${archiveNote}${candidateSubagentNote(candidate)}`,
       );
       if (classification.kind === "tombstoned") {
         lines.push(

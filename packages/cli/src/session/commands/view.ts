@@ -8,8 +8,10 @@ import {
   getSession,
   getSessionSourceFiles,
   openProjection,
+  spawnedSubagentSessions,
   viewTimeline,
   type SessionRow,
+  type SubagentColumns,
   type ViewEvent,
   type ViewTimeline,
   type ViewWindow,
@@ -23,6 +25,7 @@ import {
   multiplicityMarker,
   parseFilterValue,
 } from "./search.ts";
+import { subagentMatchMarker, subagentNote } from "./subagent-display.ts";
 
 const DEFAULT_LIMIT = 50;
 /** Fixed-width timestamp column; a missing timestamp pads to the same width. */
@@ -82,7 +85,8 @@ export const viewCommand: CommandDefinition = {
       const session = getSession(db, sessionId);
       if (!session) throw await missingSessionError(ctx.project.paths.storeDir, sessionId);
       const sourceFiles = getSessionSourceFiles(db, sessionId);
-      const header = sessionHeaderJson(session, sourceFiles);
+      const spawned = spawnedSubagentSessions(db, sessionId);
+      const header = sessionHeaderJson(session, sourceFiles, spawned);
       const projection = { storeCommit: handle.storeCommit, stale: handle.stale };
 
       if (seq !== null) {
@@ -95,7 +99,7 @@ export const viewCommand: CommandDefinition = {
         }
         return {
           json: { session: header, event: detailEventJson(event), projection },
-          human: renderDetail(session, sourceFiles, event),
+          human: renderDetail(session, sourceFiles, event, spawned),
         };
       }
 
@@ -119,7 +123,7 @@ export const viewCommand: CommandDefinition = {
           },
           projection,
         },
-        human: renderTimeline(session, sourceFiles, timeline, window),
+        human: renderTimeline(session, sourceFiles, timeline, window, spawned),
       };
     } finally {
       db.close();
@@ -127,7 +131,7 @@ export const viewCommand: CommandDefinition = {
   },
 };
 
-function sessionHeaderJson(session: SessionRow, sourceFiles: string[]): object {
+function sessionHeaderJson(session: SessionRow, sourceFiles: string[], spawned: string[]): object {
   return {
     sessionId: session.sessionId,
     harnessId: session.harnessId,
@@ -137,6 +141,21 @@ function sessionHeaderJson(session: SessionRow, sourceFiles: string[]): object {
     revisionDigest: session.revisionDigest,
     archiveState: session.archiveState,
     sourceFiles,
+    subagent: subagentJson(session, spawned),
+  };
+}
+
+/** The Session's subagent facts, in both directions of the relation. */
+export function subagentJson(session: SubagentColumns, spawned: string[]): object {
+  return {
+    // Presence is its own fact: kind and parent are both optional, so a
+    // consumer cannot read their nulls as "not a subagent".
+    isSubagent: session.subagentOrigin !== 0,
+    kind: session.subagentKind,
+    parentSourceSessionId: session.subagentParent,
+    parentSessionId: session.subagentParentSession,
+    transcriptCount: session.subagentCount,
+    spawnedSessionIds: spawned,
   };
 }
 
@@ -185,13 +204,19 @@ function detailEventJson(event: ViewEvent): object {
   };
 }
 
-function headerLines(session: SessionRow, sourceFiles: string[]): string[] {
+function headerLines(session: SessionRow, sourceFiles: string[], spawned: string[] = []): string[] {
   const parts = [session.sessionId, session.harnessId];
   const range = dateRange(session.firstTimestamp, session.lastTimestamp);
   if (range) parts.push(range);
   if (session.continuationParent) parts.push(`(continues ${session.continuationParent})`);
+  const subagent = subagentNote(session);
+  if (subagent !== null) parts.push(subagent);
   if (session.archiveState === "archived") parts.push("[archived]");
-  return [parts.join("  "), `  source: ${sourceFiles.join(", ")}`];
+  const lines = [parts.join("  "), `  source: ${sourceFiles.join(", ")}`];
+  // The inverse relation: Sessions that name this one as their parent. It
+  // is display-only, so it reads as a note rather than a family or a link.
+  if (spawned.length > 0) lines.push(`  spawned subagent sessions: ${spawned.join(", ")}`);
+  return lines;
 }
 
 function renderEventLine(event: ViewEvent, seqWidth: number): string {
@@ -203,7 +228,10 @@ function renderEventLine(event: ViewEvent, seqWidth: number): string {
       ? `${event.toolNames.join(",")}  `
       : "";
   const mark = multiplicityMarker(event.runFirstSeq, event.runLastSeq);
-  return `  ${seq} ${label} ${timestamp}  ${names}${lineText(event)}${mark}`;
+  // Which subagent contributed the event, so a timeline mixing the parent's
+  // own evidence with its subagents' stays attributable.
+  const from = subagentMatchMarker(event);
+  return `  ${seq} ${label} ${timestamp}  ${names}${lineText(event)}${mark}${from}`;
 }
 
 function renderTimeline(
@@ -211,8 +239,9 @@ function renderTimeline(
   sourceFiles: string[],
   timeline: ViewTimeline,
   window: ViewWindow,
+  spawned: string[],
 ): string {
-  const lines = headerLines(session, sourceFiles);
+  const lines = headerLines(session, sourceFiles, spawned);
   const events = timeline.events;
   const seqWidth = Math.max(0, ...events.map((e) => `#${e.seq}`.length));
   for (const event of events) lines.push(renderEventLine(event, seqWidth));
@@ -250,7 +279,12 @@ function renderTimeline(
   return lines.join("\n");
 }
 
-function renderDetail(session: SessionRow, sourceFiles: string[], event: ViewEvent): string {
+function renderDetail(
+  session: SessionRow,
+  sourceFiles: string[],
+  event: ViewEvent,
+  spawned: string[],
+): string {
   const label = eventLabel(event.kind, event.role);
   const names =
     event.kind === "tool_call" && event.toolNames.length > 0
@@ -266,7 +300,7 @@ function renderDetail(session: SessionRow, sourceFiles: string[], event: ViewEve
         ]
       : [];
   return [
-    ...headerLines(session, sourceFiles),
+    ...headerLines(session, sourceFiles, spawned),
     `  #${event.seq}  ${label}  ${event.timestamp ?? "-"}${names}`,
     `  ${locator}${eventId}`,
     ...membership,

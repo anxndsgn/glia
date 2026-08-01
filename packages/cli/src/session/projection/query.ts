@@ -14,8 +14,9 @@ import {
 } from "./family.ts";
 import type { ArchiveState } from "../domain/archive.ts";
 import type { SessionLabelSource } from "../adapters/label.ts";
+import { SUBAGENT_BUNDLE_PREFIX } from "../adapters/subagent.ts";
 
-export interface SessionRow {
+export interface SessionRow extends SubagentColumns {
   sessionId: string;
   harnessId: string;
   sourceSessionId: string;
@@ -36,6 +37,48 @@ export interface SessionRow {
   labelSeq: number | null;
 }
 
+/**
+ * What a Session states about subagents, in the two directions a Session
+ * can relate to one: it either *is* a Harness-spawned subagent (Codex, so
+ * `subagentKind` is set) or it *carries* subagent transcripts inside its
+ * own evidence (Claude Code, so `subagentCount` is above zero).
+ */
+export interface SubagentColumns {
+  /**
+   * Whether the source marked this Session a subagent. Kind and parent are
+   * both optional, so neither can stand in for the fact itself.
+   */
+  subagentOrigin: number;
+  /** Source-native subagent kind when this Session is a subagent. */
+  subagentKind: string | null;
+  /**
+   * The parent's source Session ID, exactly as the source stated it. Null
+   * when the source stated none — the parent is unknown, never guessed.
+   */
+  subagentParent: string | null;
+  /** The parent's Session ID, when that parent is itself imported. */
+  subagentParentSession: string | null;
+  /** Subagent transcripts carried inside this Session's own bundle. */
+  subagentCount: number;
+}
+
+/**
+ * What an event says about the subagent that produced it. The transcript it
+ * came from is already in the locator; this adds the source-native type
+ * Claude Code records in the sidecar, so a badge can name the agent rather
+ * than only identify it.
+ */
+export interface SubagentEvidence {
+  /**
+   * The subagent that produced this event; null when it is not subagent
+   * evidence at all. The empty string is a subagent whose agent the source
+   * did not name, which is still subagent evidence.
+   */
+  subagentId: string | null;
+  /** Source-native agent type, when a sidecar named one. */
+  subagentType: string | null;
+}
+
 export interface EvidenceLocator {
   sourceFile: string;
   sourceCursor: string;
@@ -46,7 +89,8 @@ export interface EvidenceLocator {
 export type EventFilter =
   | { slice: "speaker"; value: string; role: "user" | "assistant" }
   | { slice: "kind"; value: string; eventKind: string }
-  | { slice: "tool"; value: string; toolName: string };
+  | { slice: "tool"; value: string; toolName: string }
+  | { slice: "subagent"; value: string };
 
 export type SearchSort = "relevance" | "time";
 
@@ -62,7 +106,7 @@ export interface SearchParams {
   includeArchived: boolean;
 }
 
-export interface TextMatch {
+export interface TextMatch extends SubagentEvidence {
   eventSeq: number;
   /** Last member sequence of the match's duplicate run; equals eventSeq for a singleton. */
   runLastSeq: number;
@@ -75,7 +119,7 @@ export interface TextMatch {
   alsoIn?: string[];
 }
 
-export interface FileTouchMatch {
+export interface FileTouchMatch extends SubagentEvidence {
   eventSeq: number;
   /** Last member sequence of the match's duplicate run; equals eventSeq for a singleton. */
   runLastSeq: number;
@@ -88,7 +132,7 @@ export interface FileTouchMatch {
 }
 
 /** One Session's shown matches, capped at `perSession` of `totalInSession`. */
-export interface SessionMatchGroup<M> {
+export interface SessionMatchGroup<M> extends SubagentColumns {
   sessionId: string;
   revisionDigest: string;
   harnessId: string;
@@ -120,7 +164,27 @@ function sessionMatchColumns(prefix: string): string {
   return `${prefix}revision_digest AS revisionDigest, ${prefix}harness_id AS harnessId,
     ${prefix}first_timestamp AS firstTimestamp, ${prefix}last_timestamp AS lastTimestamp,
     ${prefix}continuation_parent AS continuationParent,
-    ${prefix}archive_state AS archiveState`;
+    ${prefix}archive_state AS archiveState, ${subagentColumns(prefix)}`;
+}
+
+/**
+ * A subagent's parent is stated as a source Session ID, so it resolves to a
+ * Session ID only when that parent Harness Session is itself imported —
+ * matched within the same Harness, since source IDs are only unique there.
+ * An unresolved parent stays the raw source ID rather than becoming null:
+ * the source did state a parent, we just do not hold it.
+ */
+function subagentColumns(prefix: string): string {
+  // The correlated subquery selects from `sessions` too, so the outer row
+  // must be named explicitly: unqualified columns inside it would bind to
+  // the inner table and silently resolve every parent to null.
+  const outer = prefix === "" ? "sessions." : prefix;
+  return `${outer}subagent_origin AS subagentOrigin,
+    ${outer}subagent_kind AS subagentKind, ${outer}subagent_parent AS subagentParent,
+    ${outer}subagent_count AS subagentCount,
+    (SELECT p.session_id FROM sessions p
+      WHERE p.source_session_id = ${outer}subagent_parent
+        AND p.harness_id = ${outer}harness_id) AS subagentParentSession`;
 }
 
 const SESSION_COLUMNS = `session_id AS sessionId, source_session_id AS sourceSessionId,
@@ -156,6 +220,25 @@ export interface SessionDetail extends SessionRow {
   artifacts: { path: string; size: number; mediaType: string; sha256: string }[];
   /** The Session's Fork Family over the whole Store; null outside any family. */
   family: FamilyDetail | null;
+  /** Imported Sessions naming this one as the subagent parent. */
+  spawnedSubagents: string[];
+}
+
+/**
+ * The Sessions that name this one as their subagent parent. This is the
+ * inverse of `subagentParentSession` and is display-only: it is not a
+ * Continuation edge and forms no Fork Family.
+ */
+export function spawnedSubagentSessions(db: Database, sessionId: string): string[] {
+  return (
+    db
+      .query(
+        `SELECT c.session_id AS sessionId FROM sessions c
+         JOIN sessions p ON p.source_session_id = c.subagent_parent AND p.harness_id = c.harness_id
+         WHERE p.session_id = ? ORDER BY c.session_id`,
+      )
+      .all(sessionId) as { sessionId: string }[]
+  ).map((row) => row.sessionId);
 }
 
 export function getSessionDetail(db: Database, sessionId: string): SessionDetail | null {
@@ -182,6 +265,7 @@ export function getSessionDetail(db: Database, sessionId: string): SessionDetail
     fileTouchCount: touches.n,
     artifacts,
     family: sessionFamilyDetail(db, sessionId),
+    spawnedSubagents: spawnedSubagentSessions(db, sessionId),
   };
 }
 
@@ -261,11 +345,21 @@ function filterClause(filter: EventFilter, index: number, bind: Bindings): strin
       return `(e.kind = 'tool_call' AND EXISTS (
         SELECT 1 FROM event_tool_names n WHERE n.event_id = e.event_id AND n.name_folded = ${key}))`;
     }
+    case "subagent":
+      // The adapter marks every subagent event as it projects it, so the
+      // slice reads that marker rather than the bundle path: transcripts
+      // older than the sibling-directory layout carry their sidechain
+      // records inline in the main transcript and are subagent evidence
+      // just the same.
+      return `json_extract(e.payload_json, '$.subagentId') IS NOT NULL`;
   }
 }
 
 /** The Session-identity and event-identity columns every matched row carries. */
-interface MatchedRow {
+interface MatchedRow extends SubagentColumns {
+  /** Subagent provenance of this event; see `SubagentEvidence`. */
+  subagentType: string | null;
+  subagentId: string | null;
   sessionId: string;
   revisionDigest: string;
   harnessId: string;
@@ -460,6 +554,11 @@ function toGroup<M>(
     lastTimestamp: first.lastTimestamp,
     continuationParent: first.continuationParent,
     archiveState: first.archiveState,
+    subagentOrigin: first.subagentOrigin,
+    subagentKind: first.subagentKind,
+    subagentParent: first.subagentParent,
+    subagentParentSession: first.subagentParentSession,
+    subagentCount: first.subagentCount,
     family,
     totalInSession,
     matches: matches(),
@@ -568,6 +667,8 @@ export function searchText(db: Database, params: SearchParams): SearchResult<Tex
        e.kind AS eventKind, e.role AS role, e.timestamp AS timestamp, e.text AS text,
        e.source_file AS sourceFile, e.source_cursor AS sourceCursor,
        e.source_event_id AS sourceEventId, e.identity_key AS identityKey,
+       json_extract(e.payload_json, '$.subagentType') AS subagentType,
+       json_extract(e.payload_json, '$.subagentId') AS subagentId,
        ${rank} AS rank
      ${from}
      WHERE ${where}`;
@@ -579,6 +680,8 @@ export function searchText(db: Database, params: SearchParams): SearchResult<Tex
     timestamp: row.timestamp,
     excerpt: renderExcerpt(row.text, terms),
     locator: locatorOf(row),
+    subagentType: row.subagentType,
+    subagentId: row.subagentId,
   });
 
   const familyRows = listFamilyRows(db);
@@ -627,6 +730,8 @@ export function searchFileTouches(
        t.source_path AS sourcePath, t.normalized_path AS normalizedPath,
        e.source_file AS sourceFile, e.source_cursor AS sourceCursor,
        e.source_event_id AS sourceEventId, e.identity_key AS identityKey,
+       json_extract(e.payload_json, '$.subagentType') AS subagentType,
+       json_extract(e.payload_json, '$.subagentId') AS subagentId,
        0 AS rank
      ${from}
      WHERE ${where}`;
@@ -637,6 +742,8 @@ export function searchFileTouches(
     sourcePath: row.sourcePath,
     normalizedPath: row.normalizedPath,
     locator: locatorOf(row),
+    subagentType: row.subagentType,
+    subagentId: row.subagentId,
   });
 
   const familyRows = listFamilyRows(db);
@@ -660,7 +767,7 @@ export type ViewWindow =
   | { mode: "range"; from: number | null; limit: number | null }
   | { mode: "tail"; count: number };
 
-export interface ViewEvent {
+export interface ViewEvent extends SubagentEvidence {
   seq: number;
   /** The event's duplicate-run bounds; a singleton has runFirstSeq === runLastSeq === seq. */
   runFirstSeq: number;
@@ -697,13 +804,17 @@ interface ViewEventRow {
   sourceFile: string;
   sourceCursor: string;
   sourceEventId: string | null;
+  subagentType: string | null;
+  subagentId: string | null;
 }
 
 const VIEW_EVENT_COLUMNS = `e.event_id AS eventId, e.seq AS seq,
   e.run_first_seq AS runFirstSeq, e.run_last_seq AS runLastSeq,
   e.kind AS kind, e.role AS role,
   e.timestamp AS timestamp, e.text AS text, e.source_file AS sourceFile,
-  e.source_cursor AS sourceCursor, e.source_event_id AS sourceEventId`;
+  e.source_cursor AS sourceCursor, e.source_event_id AS sourceEventId,
+  json_extract(e.payload_json, '$.subagentType') AS subagentType,
+  json_extract(e.payload_json, '$.subagentId') AS subagentId`;
 
 /**
  * One Session's event timeline in source (`seq`) order — never re-ranked.
@@ -862,6 +973,8 @@ function shapeViewEvents(db: Database, rows: ViewEventRow[]): ViewEvent[] {
     text: row.text,
     toolNames: names.get(row.eventId) ?? [],
     locator: locatorOf(row),
+    subagentType: row.subagentType,
+    subagentId: row.subagentId,
   }));
 }
 

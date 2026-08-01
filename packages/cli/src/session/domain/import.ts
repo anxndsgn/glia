@@ -13,6 +13,7 @@ import type { CapturedBundle, SessionCandidate } from "../adapters/types.ts";
 import { bundleDigest, manifestOf } from "../storage/bundle.ts";
 import {
   readSessionMeta,
+  SESSION_META_SCHEMA_VERSION,
   writeAcceptedRevision,
   type SessionMeta,
 } from "../storage/store-layout.ts";
@@ -505,7 +506,7 @@ function sessionMetaFor(item: StagedCandidate, fileCount: number): SessionMeta {
   return {
     ...override,
     ...tombstoneOverride,
-    schemaVersion: 1,
+    schemaVersion: SESSION_META_SCHEMA_VERSION,
     sessionId: candidate.candidateId,
     harnessId: candidate.identity.harnessId,
     sourceSessionId: candidate.identity.sourceSessionId,
@@ -518,6 +519,9 @@ function sessionMetaFor(item: StagedCandidate, fileCount: number): SessionMeta {
           : `opening path ${candidate.openingPath ?? "(unknown)"} mapped through a machine-local binding`,
     },
     continuation: candidate.continuation,
+    // Written only when the source states it, so a non-subagent Session's
+    // metadata is byte-identical to what it was before the field existed.
+    ...(candidate.subagent ? { subagent: candidate.subagent } : {}),
     currentRevision: {
       digest: item.digest,
       acceptedAt: new Date().toISOString(),

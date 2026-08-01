@@ -368,6 +368,37 @@ describe("Session Fork Family", () => {
     expect(listed.human).not.toContain("(family");
   });
 
+  test("subagent evidence and subagent relations never form a family", async () => {
+    // A Claude Code Session carrying subagent transcripts: their events get
+    // identity keys like any other, but only ever match their own copies.
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "sub-parent",
+      cwd: env.worktree,
+      subagents: [{ agentId: "alpha" }, { agentId: "beta" }],
+    });
+    // A Codex subagent pointing at an imported parent thread: a display-only
+    // relation, deliberately not a Continuation edge.
+    await writeCodexSession(env.codexHome, {
+      sessionId: "11111111-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      userText: "the parent thread's own request",
+      agentText: "the parent thread's own answer",
+    });
+    await writeCodexSession(env.codexHome, {
+      sessionId: "22222222-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      userText: "the subagent thread's own instructions",
+      agentText: "the subagent thread's own answer",
+      subagent: { kind: "review", parentThreadId: "11111111-2222-3333-4444-555555555555" },
+    });
+    await importAll();
+
+    const listed = await list();
+    expect(listed.json.sessions.length).toBe(3);
+    expect(listed.json.sessions.every((r) => r.family === null)).toBeTrue();
+    expect(listed.human).not.toContain("(family");
+  });
+
   test("a Continuation-linked pair with zero shared events is one family and collapses nothing", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "cont-parent",

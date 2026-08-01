@@ -264,6 +264,46 @@ describe("compiled CLI contract", () => {
     expect(doc.result.matches[0]!.alsoIn).toHaveLength(1);
   });
 
+  test("subagent facts reach the JSON documents of show, view, and search", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "sub-cli",
+      cwd: env.worktree,
+      userText: "the human's own request",
+      subagents: [{ agentId: "alpha-1111", spawnPrompt: "SUBCLIPROBE search the repo" }],
+    });
+    await glia(["import"]);
+    const sessionId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "sub-cli" });
+
+    const shown = await glia(["--json", "show", sessionId]);
+    expect(shown.exitCode).toBe(0);
+    const showDoc = JSON.parse(shown.stdout) as {
+      result: { session: { subagent: Record<string, unknown> } };
+    };
+    expect(showDoc.result.session.subagent).toMatchObject({
+      kind: null,
+      transcriptCount: 1,
+      spawnedSessionIds: [],
+    });
+
+    const viewed = await glia(["--json", "view", sessionId, "--all"]);
+    const viewDoc = JSON.parse(viewed.stdout) as {
+      result: { session: { sourceFiles: string[]; subagent: Record<string, unknown> } };
+    };
+    expect(viewDoc.result.session.sourceFiles).toContain("source/subagents/agent-alpha-1111.jsonl");
+    expect(viewDoc.result.session.subagent).toMatchObject({ transcriptCount: 1 });
+
+    // The provenance slice is part of the documented --filter vocabulary.
+    const search = await glia(["--json", "search", "SUBCLIPROBE", "--filter", "subagent"]);
+    expect(search.exitCode).toBe(0);
+    const searchDoc = JSON.parse(search.stdout) as {
+      result: { totalMatches: number; matches: { locator: { sourceFile: string } }[] };
+    };
+    expect(searchDoc.result.totalMatches).toBe(1);
+    expect(searchDoc.result.matches[0]!.locator.sourceFile).toBe(
+      "source/subagents/agent-alpha-1111.jsonl",
+    );
+  });
+
   test("source bundle bytes and hashes survive store acceptance and export exactly", async () => {
     const sourcePath = await writeClaudeSession(env.claudeHome, {
       sessionId: "aaaa-1",

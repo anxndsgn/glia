@@ -139,6 +139,18 @@ export async function makeSecondReplica(
  */
 export const FAKE_KEY = ["sk-ant", "api03-FAKEFAKEFAKEFAKE"].join("-");
 
+export interface ClaudeSubagentSpec {
+  agentId: string;
+  /** Extra records appended after the harness-authored spawn prompt. */
+  lines?: unknown[];
+  spawnPrompt?: string;
+  /**
+   * The `agent-<id>.meta.json` sidecar Claude Code writes beside the
+   * transcript. Omit to model an older transcript that has none.
+   */
+  meta?: { agentType?: string; description?: string; toolUseId?: string; spawnDepth?: number };
+}
+
 export interface ClaudeSessionSpec {
   sessionId: string;
   cwd: string;
@@ -147,6 +159,8 @@ export interface ClaudeSessionSpec {
   readFilePath?: string;
   writtenFilePath?: string;
   extraLines?: unknown[];
+  /** Sibling subagent transcripts under `<stem>/subagents/`. */
+  subagents?: ClaudeSubagentSpec[];
 }
 
 /** Writes a sanitized Claude Code transcript fixture; never real user history. */
@@ -210,6 +224,58 @@ export async function writeClaudeSession(
   ];
   const path = join(dir, `${spec.sessionId}.jsonl`);
   await Bun.write(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  for (const subagent of spec.subagents ?? []) {
+    await writeClaudeSubagent(dir, spec, subagent);
+  }
+  return path;
+}
+
+/**
+ * One subagent transcript beside its parent, in the source-native layout:
+ * `<dir>/<stem>/subagents/agent-<agentId>.jsonl`, carrying the parent's
+ * `sessionId`, `isSidechain: true`, and the harness-authored spawn prompt
+ * as its first user record.
+ */
+export async function writeClaudeSubagent(
+  projectDir: string,
+  spec: ClaudeSessionSpec,
+  subagent: ClaudeSubagentSpec,
+): Promise<string> {
+  const dir = join(projectDir, spec.sessionId, "subagents");
+  await mkdir(dir, { recursive: true });
+  const envelope = {
+    sessionId: spec.sessionId,
+    agentId: subagent.agentId,
+    isSidechain: true,
+    cwd: spec.cwd,
+  };
+  const lines: unknown[] = [
+    {
+      type: "user",
+      uuid: `${subagent.agentId}-u1`,
+      ...envelope,
+      timestamp: "2026-07-15T10:00:20Z",
+      message: {
+        role: "user",
+        content: subagent.spawnPrompt ?? "search the repo for retry helpers",
+      },
+    },
+    ...(subagent.lines ?? []),
+  ];
+  const path = join(dir, `agent-${subagent.agentId}.jsonl`);
+  await Bun.write(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  if (subagent.meta !== undefined) {
+    await Bun.write(
+      join(dir, `agent-${subagent.agentId}.meta.json`),
+      JSON.stringify({
+        agentType: "Explore",
+        description: "map the retry helpers",
+        toolUseId: `toolu_${subagent.agentId}`,
+        spawnDepth: 1,
+        ...subagent.meta,
+      }),
+    );
+  }
   return path;
 }
 
@@ -217,10 +283,20 @@ export interface CodexSessionSpec {
   sessionId: string;
   cwd: string | null;
   resumedFrom?: string;
+  userText?: string;
   agentText?: string;
   preambleLines?: unknown[];
   mirrorUserMessage?: boolean;
-  subagent?: boolean;
+  /**
+   * `true` writes the observed `{ other: <name> }` shape. An object writes
+   * the shape the modern multi-agent rollouts carry, including
+   * `parent_thread_id` when a parent is stated; `nestedKind` selects the
+   * `{ other: … }` spelling over the plain string.
+   */
+  subagent?:
+    | boolean
+    | { kind: string; parentThreadId?: string; nestedKind?: boolean }
+    | { bare: true };
   extraLines?: unknown[];
 }
 
@@ -234,10 +310,24 @@ export async function writeCodexSession(
   const meta: Record<string, unknown> = { id: spec.sessionId, timestamp: "2026-07-15T09:00:00Z" };
   if (spec.cwd !== null) meta["cwd"] = spec.cwd;
   if (spec.resumedFrom) meta["resumed_from"] = spec.resumedFrom;
-  if (spec.subagent) {
+  if (spec.subagent === true) {
     meta["thread_source"] = "subagent";
     meta["source"] = { subagent: { other: "guardian" } };
+  } else if (spec.subagent && "bare" in spec.subagent) {
+    // The shape the adapter's predicate accepts but no local rollout
+    // happens to use: flagged a subagent, naming neither kind nor parent.
+    meta["thread_source"] = "subagent";
+  } else if (spec.subagent) {
+    const { kind, parentThreadId, nestedKind } = spec.subagent;
+    meta["thread_source"] = "subagent";
+    meta["source"] = { subagent: nestedKind ? { other: kind } : kind };
+    meta["multi_agent_version"] = 1;
+    if (parentThreadId !== undefined) {
+      meta["parent_thread_id"] = parentThreadId;
+      meta["session_id"] = spec.sessionId;
+    }
   }
+  const userText = spec.userText ?? "add retry logic to the sync loop";
   const lines: unknown[] = [
     { timestamp: "2026-07-15T09:00:00Z", type: "session_meta", payload: meta },
     ...(spec.preambleLines ?? []),
@@ -248,7 +338,7 @@ export async function writeCodexSession(
         type: "message",
         id: "m1",
         role: "user",
-        content: [{ type: "input_text", text: "add retry logic to the sync loop" }],
+        content: [{ type: "input_text", text: userText }],
       },
     },
     ...(spec.mirrorUserMessage
@@ -258,7 +348,7 @@ export async function writeCodexSession(
             type: "event_msg",
             payload: {
               type: "user_message",
-              message: "add retry logic to the sync loop",
+              message: userText,
               client_id: "client-1",
             },
           },

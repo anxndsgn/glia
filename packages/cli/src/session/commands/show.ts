@@ -5,6 +5,24 @@ import { ensureProjection } from "../projection/publish.ts";
 import { getSessionDetail, openProjection } from "../projection/query.ts";
 import { requireSessionUnconflicted } from "../domain/conflict.ts";
 import { missingSessionError } from "../domain/deletion.ts";
+import { subagentNote } from "./subagent-display.ts";
+import { subagentJson } from "./view.ts";
+import type { SessionDetail } from "../projection/query.ts";
+
+/**
+ * Both directions of the subagent relation, stated only where they hold:
+ * what this Session is a subagent of, what its bundle carries, and which
+ * Sessions name it as their parent.
+ */
+function subagentLines(detail: SessionDetail): string[] {
+  const lines: string[] = [];
+  const note = subagentNote(detail);
+  if (note !== null) lines.push(`  subagent: ${note}`);
+  if (detail.spawnedSubagents.length > 0) {
+    lines.push(`  spawned subagent sessions: ${detail.spawnedSubagents.join(", ")}`);
+  }
+  return lines;
+}
 
 export const showCommand: CommandDefinition = {
   name: "show",
@@ -63,6 +81,7 @@ export const showCommand: CommandDefinition = {
         `  association: ${detail.associationMode}`,
         `  archive state: ${detail.archiveState}`,
         detail.continuationParent ? `  continues: ${detail.continuationParent}` : null,
+        ...subagentLines(detail),
         ...familyLines,
         `  revision: ${detail.revisionDigest.slice(0, 12)} accepted ${detail.acceptedAt}`,
         `  events: ${detail.eventCount} (${kinds})`,
@@ -71,7 +90,10 @@ export const showCommand: CommandDefinition = {
       ]
         .filter((l): l is string => l !== null)
         .join("\n");
-      return { json: { session: detail }, human };
+      return {
+        json: { session: { ...detail, subagent: subagentJson(detail, detail.spawnedSubagents) } },
+        human,
+      };
     } finally {
       db.close();
     }

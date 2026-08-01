@@ -57,6 +57,9 @@ export const exportCommand: CommandDefinition = {
         openingPath: meta.openingPath,
       },
       continuation: meta.continuation,
+      // Exported evidence must be complete on its own: a subagent Session
+      // that lost its parent link would not be.
+      subagent: meta.subagent ?? null,
       archiveState,
       acceptedAt: meta.currentRevision.acceptedAt,
       files: bundle.manifest.files,

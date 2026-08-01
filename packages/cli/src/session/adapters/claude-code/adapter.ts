@@ -4,6 +4,14 @@ import { readdir } from "node:fs/promises";
 import { asObject, asString, readJsonlLines } from "../jsonl.ts";
 import { LABEL_PAYLOAD_KEY, META_PAYLOAD_KEY, sessionLabel } from "../label.ts";
 import { captureAllowlisted, directoryExists, touch } from "../capture.ts";
+import {
+  isSubagentTranscriptPath,
+  subagentIdOf,
+  subagentSidecarPathFor,
+  SUBAGENT_BUNDLE_PREFIX,
+  SUBAGENT_PAYLOAD_KEY,
+  SUBAGENT_TYPE_PAYLOAD_KEY,
+} from "../subagent.ts";
 import { candidateIdOf } from "../../domain/identity.ts";
 import { projected } from "../types.ts";
 import type {
@@ -15,6 +23,7 @@ import type {
   NormalizedEventKind,
   SessionHarnessAdapter,
   SessionCandidate,
+  SourceFileRef,
   StagingArea,
   StoredSourceBundle,
 } from "../types.ts";
@@ -29,6 +38,13 @@ const TRANSCRIPT_BUNDLE_PATH = "source/transcript.jsonl";
  * - The stable Session ID is the `sessionId` field carried by transcript
  *   events (falling back to the file name stem, which Claude Code derives
  *   from the same ID).
+ * - A subagent invocation gets its own transcript beside the main one, at
+ *   `<stem>/subagents/agent-<agentId>.jsonl` (the directory is keyed by the
+ *   transcript's file stem, not by the event-carried `sessionId`). Those
+ *   records share the main envelope and additionally carry `agentId`,
+ *   `isSidechain: true`, and the parent's `sessionId`. They are evidence of
+ *   the parent Session — captured into its bundle, never a Session of their
+ *   own — so `sessionIdOf` and Fork Family semantics are untouched.
  * - The Opening Path is the `cwd` of the earliest event that carries one;
  *   the munged directory name is not authoritative.
  * - Resuming appends to the same session file; a desktop fork creates a
@@ -104,11 +120,15 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
             }
           }
         }
-        sessionId ??= basename(fileName, ".jsonl");
+        const stem = basename(fileName, ".jsonl");
+        sessionId ??= stem;
         const identity = { harnessId: "claude-code" as const, sourceSessionId: sessionId };
         yield {
           identity,
           candidateId: candidateIdOf(identity),
+          // Claude Code subagents are evidence inside their parent Session,
+          // never Sessions of their own, so no candidate is ever a subagent.
+          subagent: null,
           openingPath,
           sourceFiles: [
             {
@@ -116,6 +136,7 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
               bundlePath: TRANSCRIPT_BUNDLE_PATH,
               mediaType: "application/jsonl",
             },
+            ...(await subagentSourceFiles(join(dir, stem))),
           ],
           continuation: parentSessionId ? { parentSessionId } : null,
           sessionTime,
@@ -130,42 +151,151 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
   },
 
   async *project(bundle: StoredSourceBundle): AsyncIterable<NormalizedEvent> {
-    const lines = await readJsonlLines(join(bundle.dir, TRANSCRIPT_BUNDLE_PATH));
-    for (const line of lines) {
-      const base = {
-        sourceFile: TRANSCRIPT_BUNDLE_PATH,
-        sourceCursor: `line:${line.line}`,
-      };
-      if (!line.value) {
-        yield { ...base, ...projected("unknown"), timestamp: null };
-        continue;
-      }
-      const value = line.value;
-      const type = asString(value["type"]);
-      const message = asObject(value["message"]);
-      const kind = classify(type, message);
-      const title = titleOf(type, value);
-      yield {
-        ...base,
-        kind,
-        sourceEventId: asString(value["uuid"]),
-        timestamp: asString(value["timestamp"]),
-        role: message ? asString(message["role"]) : null,
-        // A title line carries its title as the event's text: it is
-        // source-provided evidence, and dropping it lost the one readable
-        // name the Session has.
-        text: title?.text ?? extractText(message),
-        payload: title
-          ? { [LABEL_PAYLOAD_KEY]: title.source }
-          : type === "user" && value["isMeta"] === true
-            ? { [META_PAYLOAD_KEY]: true }
-            : null,
-        toolNames: kind === "tool_call" ? extractToolNames(message) : [],
-        fileTouches: extractFileTouches(value, message),
-      };
+    // The main transcript first, then each subagent transcript in manifest
+    // path order, so a Session's evidence reads parent-before-children and
+    // one bundle always projects in the same order.
+    yield* projectFile(bundle, TRANSCRIPT_BUNDLE_PATH, null, null);
+    for (const path of subagentBundlePaths(bundle)) {
+      // The sidecar is metadata about the transcript, not evidence of its
+      // own: it names the agent, it never becomes an event.
+      yield* projectFile(bundle, path, subagentIdOf(path), await subagentTypeOf(bundle, path));
     }
   },
 };
+
+/**
+ * The subagent transcripts a bundle carries, read from its manifest rather
+ * than the filesystem: the manifest is the accepted Revision's file list, so
+ * projection never sees anything capture did not attest.
+ */
+function subagentBundlePaths(bundle: StoredSourceBundle): string[] {
+  return bundle.manifest.files
+    .map((file) => file.path)
+    .filter(isSubagentTranscriptPath)
+    .sort();
+}
+
+/**
+ * One transcript file's events. `subagentId` is non-null for a subagent
+ * transcript, where every user-role record is the parent Harness speaking —
+ * the spawn prompt it authored and the tool_result envelopes it relays — so
+ * the events are marked injected and never read as the Session's Label.
+ */
+async function* projectFile(
+  bundle: StoredSourceBundle,
+  bundlePath: string,
+  subagentId: string | null,
+  subagentType: string | null,
+): AsyncIterable<NormalizedEvent> {
+  const lines = await readJsonlLines(join(bundle.dir, bundlePath));
+  for (const line of lines) {
+    const base = {
+      sourceFile: bundlePath,
+      sourceCursor: `line:${line.line}`,
+    };
+    if (!line.value) {
+      yield { ...base, ...projected("unknown"), timestamp: null };
+      continue;
+    }
+    const value = line.value;
+    const type = asString(value["type"]);
+    const message = asObject(value["message"]);
+    const kind = classify(type, message);
+    const title = titleOf(type, value);
+    // A main-file line may itself be sidechain evidence in transcripts
+    // older than the sibling-directory layout. Read it as the subagent
+    // evidence it is; per-agent grouping is not reconstructed.
+    const inlineSubagentId =
+      subagentId ?? (value["isSidechain"] === true ? (asString(value["agentId"]) ?? "") : null);
+    const harnessInjected =
+      (inlineSubagentId !== null && type === "user") ||
+      (type === "user" && value["isMeta"] === true);
+    yield {
+      ...base,
+      kind,
+      sourceEventId: asString(value["uuid"]),
+      timestamp: asString(value["timestamp"]),
+      role: message ? asString(message["role"]) : null,
+      // A title line carries its title as the event's text: it is
+      // source-provided evidence, and dropping it lost the one readable
+      // name the Session has.
+      text: title?.text ?? extractText(message),
+      payload: eventPayload(title, harnessInjected, inlineSubagentId, subagentType),
+      toolNames: kind === "tool_call" ? extractToolNames(message) : [],
+      fileTouches: extractFileTouches(value, message),
+    };
+  }
+}
+
+function eventPayload(
+  title: { source: "custom_title" | "ai_title" | "summary" } | null,
+  harnessInjected: boolean,
+  subagentId: string | null,
+  subagentType: string | null,
+): Record<string, unknown> | null {
+  const payload: Record<string, unknown> = {};
+  if (title) payload[LABEL_PAYLOAD_KEY] = title.source;
+  if (harnessInjected) payload[META_PAYLOAD_KEY] = true;
+  // Written whenever the event is subagent evidence, including the empty
+  // string a legacy inline sidechain line with no `agentId` yields: the
+  // key's presence is the provenance fact, its value only names the agent.
+  if (subagentId !== null) payload[SUBAGENT_PAYLOAD_KEY] = subagentId;
+  if (subagentType) payload[SUBAGENT_TYPE_PAYLOAD_KEY] = subagentType;
+  return Object.keys(payload).length > 0 ? payload : null;
+}
+
+/**
+ * The subagent transcripts sitting beside a main transcript. A missing
+ * directory is the ordinary case (most Sessions spawn none) and yields
+ * nothing; names are sorted so manifests and Revision digests stay
+ * deterministic.
+ */
+async function subagentSourceFiles(sessionSubdir: string): Promise<SourceFileRef[]> {
+  const dir = join(sessionSubdir, "subagents");
+  if (!(await directoryExists(dir))) return [];
+  const present = new Set(await readdir(dir));
+  const files: SourceFileRef[] = [];
+  for (const name of [...present].filter(isSubagentTranscriptName).sort()) {
+    files.push({
+      absolutePath: join(dir, name),
+      bundlePath: `${SUBAGENT_BUNDLE_PREFIX}${name}`,
+      mediaType: "application/jsonl",
+    });
+    // The sidecar is optional: transcripts written before Claude Code
+    // wrote one are captured alone rather than failing the Candidate.
+    const sidecar = name.replace(/\.jsonl$/, ".meta.json");
+    if (!present.has(sidecar)) continue;
+    files.push({
+      absolutePath: join(dir, sidecar),
+      bundlePath: `${SUBAGENT_BUNDLE_PREFIX}${sidecar}`,
+      mediaType: "application/json",
+    });
+  }
+  return files;
+}
+
+function isSubagentTranscriptName(name: string): boolean {
+  return name.startsWith("agent-") && name.endsWith(".jsonl");
+}
+
+/**
+ * The subagent's type as its sidecar states it, or null when the sidecar is
+ * absent or unreadable. A malformed sidecar degrades the badge to the bare
+ * agent id; it never fails the projection of real transcript evidence.
+ */
+async function subagentTypeOf(
+  bundle: StoredSourceBundle,
+  bundlePath: string,
+): Promise<string | null> {
+  const sidecar = subagentSidecarPathFor(bundlePath);
+  if (!bundle.manifest.files.some((file) => file.path === sidecar)) return null;
+  try {
+    const parsed = asObject(JSON.parse(await Bun.file(join(bundle.dir, sidecar)).text()));
+    return parsed ? asString(parsed["agentType"]) : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The Session titles Claude Code sessions as their own transcript lines: a

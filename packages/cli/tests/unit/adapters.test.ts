@@ -121,6 +121,187 @@ describe("claude-code adapter", () => {
     expect(last.kind).toBe("unknown");
     expect(last.sourceCursor).toBe("line:4");
   });
+
+  test("captures sibling subagent transcripts into the parent's bundle, sorted", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "subs-1",
+      cwd: env.worktree,
+      subagents: [{ agentId: "zeta" }, { agentId: "alpha" }],
+    });
+    const candidates = await discoverAll(claudeCodeAdapter);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.sourceFiles.map((f) => f.bundlePath)).toEqual([
+      "source/transcript.jsonl",
+      "source/subagents/agent-alpha.jsonl",
+      "source/subagents/agent-zeta.jsonl",
+    ]);
+  });
+
+  test("keys the subagent directory on the file stem, not the event session id", async () => {
+    // The transcript's events name a different sessionId than the file
+    // stem; the sibling directory Claude Code writes is stem-keyed.
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "stem-1",
+      cwd: env.worktree,
+      subagents: [{ agentId: "alpha" }],
+    });
+    const dir = join(env.claudeHome, "projects", env.worktree.replaceAll("/", "-"));
+    const transcript = join(dir, "stem-1.jsonl");
+    const rewritten = (await Bun.file(transcript).text()).replaceAll(
+      `"sessionId":"stem-1"`,
+      `"sessionId":"renamed-in-events"`,
+    );
+    await Bun.write(transcript, rewritten);
+
+    const candidates = await discoverAll(claudeCodeAdapter);
+    expect(candidates[0]?.identity.sourceSessionId).toBe("renamed-in-events");
+    expect(candidates[0]?.sourceFiles.map((f) => f.bundlePath)).toContain(
+      "source/subagents/agent-alpha.jsonl",
+    );
+  });
+
+  test("a session with no subagent directory is unchanged", async () => {
+    await writeClaudeSession(env.claudeHome, { sessionId: "plain-1", cwd: env.worktree });
+    const candidates = await discoverAll(claudeCodeAdapter);
+    expect(candidates[0]?.sourceFiles).toHaveLength(1);
+    const events = await projectAll(claudeCodeAdapter, candidates[0]!);
+    expect(events.every((e) => e.sourceFile === "source/transcript.jsonl")).toBeTrue();
+  });
+
+  test("projects subagent evidence after the main transcript, marked and attributed", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "subs-2",
+      cwd: env.worktree,
+      subagents: [
+        {
+          agentId: "alpha",
+          lines: [
+            {
+              type: "assistant",
+              uuid: "alpha-a1",
+              sessionId: "subs-2",
+              agentId: "alpha",
+              isSidechain: true,
+              timestamp: "2026-07-15T10:00:22Z",
+              message: {
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: "st1",
+                    name: "Read",
+                    input: { file_path: `${env.worktree}/src/retry.ts` },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const candidates = await discoverAll(claudeCodeAdapter);
+    const events = await projectAll(claudeCodeAdapter, candidates[0]!);
+
+    const main = events.filter((e) => e.sourceFile === "source/transcript.jsonl");
+    const sub = events.filter((e) => e.sourceFile === "source/subagents/agent-alpha.jsonl");
+    expect(main).toHaveLength(3);
+    expect(sub).toHaveLength(2);
+    // Parent evidence precedes the subagent evidence it spawned.
+    expect(events.indexOf(sub[0]!)).toBeGreaterThan(events.indexOf(main[main.length - 1]!));
+
+    expect(sub.every((e) => e.payload?.["subagentId"] === "alpha")).toBeTrue();
+    // The spawn prompt is the parent harness speaking through the user channel.
+    expect(sub[0]?.role).toBe("user");
+    expect(sub[0]?.payload?.["harnessInjected"]).toBeTrue();
+    // Subagent tool traffic is real, searchable evidence.
+    expect(sub[1]?.kind).toBe("tool_call");
+    expect(sub[1]?.fileTouches.map((t) => t.sourcePath)).toEqual([`${env.worktree}/src/retry.ts`]);
+    expect(sub[1]?.sourceCursor).toBe("line:2");
+  });
+
+  test("a subagent spawn prompt never becomes the session label", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "subs-3",
+      cwd: env.worktree,
+      userText: "the human's opening request",
+      subagents: [{ agentId: "alpha", spawnPrompt: "harness-authored spawn instructions" }],
+    });
+    const candidates = await discoverAll(claudeCodeAdapter);
+    const events = await projectAll(claudeCodeAdapter, candidates[0]!);
+    const labelable = events.filter(
+      (e) => e.kind === "message" && e.role === "user" && e.payload?.["harnessInjected"] !== true,
+    );
+    expect(labelable.map((e) => e.text)).toEqual(["the human's opening request"]);
+  });
+
+  test("captures the sidecar beside its transcript and names the agent from it", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "meta-1",
+      cwd: env.worktree,
+      subagents: [{ agentId: "alpha", meta: { agentType: "Explore" } }],
+    });
+    const candidates = await discoverAll(claudeCodeAdapter);
+    expect(candidates[0]?.sourceFiles.map((f) => f.bundlePath)).toEqual([
+      "source/transcript.jsonl",
+      "source/subagents/agent-alpha.jsonl",
+      "source/subagents/agent-alpha.meta.json",
+    ]);
+    expect(
+      candidates[0]?.sourceFiles.find((f) => f.bundlePath.endsWith(".meta.json"))?.mediaType,
+    ).toBe("application/json");
+
+    const events = await projectAll(claudeCodeAdapter, candidates[0]!);
+    // The sidecar names the agent but is never itself projected as events.
+    expect(events.some((e) => e.sourceFile.endsWith(".meta.json"))).toBeFalse();
+    const sub = events.filter((e) => e.sourceFile === "source/subagents/agent-alpha.jsonl");
+    expect(sub).toHaveLength(1);
+    expect(sub[0]?.payload?.["subagentType"]).toBe("Explore");
+  });
+
+  test("a transcript with no sidecar, or an unreadable one, still projects", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "meta-2",
+      cwd: env.worktree,
+      subagents: [{ agentId: "alpha" }, { agentId: "beta", meta: {} }],
+    });
+    const dir = join(env.claudeHome, "projects", env.worktree.replaceAll("/", "-"));
+    await Bun.write(join(dir, "meta-2", "subagents", "agent-beta.meta.json"), "{ not json");
+
+    const candidates = await discoverAll(claudeCodeAdapter);
+    const events = await projectAll(claudeCodeAdapter, candidates[0]!);
+    const alpha = events.find((e) => e.sourceFile === "source/subagents/agent-alpha.jsonl");
+    const beta = events.find((e) => e.sourceFile === "source/subagents/agent-beta.jsonl");
+    // No sidecar at all, and a malformed one, both degrade to the bare id
+    // rather than failing the Session's real evidence.
+    expect(alpha?.payload?.["subagentId"]).toBe("alpha");
+    expect(alpha?.payload?.["subagentType"]).toBeUndefined();
+    expect(beta?.payload?.["subagentId"]).toBe("beta");
+    expect(beta?.payload?.["subagentType"]).toBeUndefined();
+  });
+
+  test("marks a legacy inline sidechain line in the main transcript", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "subs-4",
+      cwd: env.worktree,
+      extraLines: [
+        {
+          type: "user",
+          uuid: "legacy-u1",
+          sessionId: "subs-4",
+          agentId: "legacy-agent",
+          isSidechain: true,
+          timestamp: "2026-07-15T10:00:30Z",
+          message: { role: "user", content: "inline sidechain prompt" },
+        },
+      ],
+    });
+    const candidates = await discoverAll(claudeCodeAdapter);
+    const events = await projectAll(claudeCodeAdapter, candidates[0]!);
+    const inline = events[events.length - 1]!;
+    expect(inline.sourceFile).toBe("source/transcript.jsonl");
+    expect(inline.payload?.["harnessInjected"]).toBeTrue();
+    expect(inline.payload?.["subagentId"]).toBe("legacy-agent");
+  });
 });
 
 describe("codex adapter", () => {
@@ -251,6 +432,57 @@ describe("codex adapter", () => {
     const userEvents = events.filter((event) => event.role === "user");
     expect(userEvents).toHaveLength(2);
     expect(userEvents.every((event) => event.payload?.["harnessInjected"] === true)).toBeTrue();
+  });
+
+  test("reads subagent kind and parent thread id from every observed source shape", async () => {
+    await writeCodexSession(env.codexHome, {
+      sessionId: "aaaaaaa1-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      subagent: { kind: "review", parentThreadId: "parent-thread-1" },
+    });
+    await writeCodexSession(env.codexHome, {
+      sessionId: "aaaaaaa2-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      subagent: { kind: "guardian", parentThreadId: "parent-thread-2", nestedKind: true },
+    });
+    // The legacy shape: flagged a subagent, but stating no parent.
+    await writeCodexSession(env.codexHome, {
+      sessionId: "aaaaaaa3-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      subagent: true,
+    });
+    await writeCodexSession(env.codexHome, {
+      sessionId: "aaaaaaa4-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+    });
+
+    const bySourceId = new Map(
+      (await discoverAll(codexAdapter)).map((c) => [c.identity.sourceSessionId, c]),
+    );
+    expect(bySourceId.get("aaaaaaa1-2222-3333-4444-555555555555")?.subagent).toEqual({
+      kind: "review",
+      parentSourceSessionId: "parent-thread-1",
+    });
+    expect(bySourceId.get("aaaaaaa2-2222-3333-4444-555555555555")?.subagent).toEqual({
+      kind: "guardian",
+      parentSourceSessionId: "parent-thread-2",
+    });
+    // No parent is ever inferred for a rollout that states none.
+    expect(bySourceId.get("aaaaaaa3-2222-3333-4444-555555555555")?.subagent).toEqual({
+      kind: "guardian",
+      parentSourceSessionId: null,
+    });
+    expect(bySourceId.get("aaaaaaa4-2222-3333-4444-555555555555")?.subagent).toBeNull();
+  });
+
+  test("a subagent relation is never read as continuation", async () => {
+    await writeCodexSession(env.codexHome, {
+      sessionId: "aaaaaaa5-2222-3333-4444-555555555555",
+      cwd: env.worktree,
+      subagent: { kind: "review", parentThreadId: "parent-thread-1" },
+    });
+    const candidates = await discoverAll(codexAdapter);
+    expect(candidates[0]?.continuation).toBeNull();
   });
 
   test("projects patch changes as file touches and keeps unknown kinds locatable", async () => {
