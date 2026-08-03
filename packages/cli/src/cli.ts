@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
+import { homedir } from "node:os";
 import { Command, CommanderError } from "commander";
 import { buildIdentityLine, buildInfo } from "./core/build-info.ts";
+import { runSkillInstall, runSkillRemove } from "./core/commands/skill.ts";
 import { runStatus } from "./core/commands/status.ts";
 import { runStoreRemoteSet, runStoreRemoteShow } from "./core/commands/store-remote.ts";
 import { runSyncCommand } from "./core/commands/sync.ts";
@@ -144,6 +146,62 @@ storeRemote
       runStoreRemoteShow(await loadRunContext(flags, { allowMissingStore: true })),
     );
   });
+
+interface SkillCliOptions {
+  global?: boolean;
+  project?: boolean;
+  claude?: boolean;
+  agents?: boolean;
+  target?: string;
+  force?: boolean;
+}
+
+function skillTargetFlags(opts: SkillCliOptions) {
+  return {
+    global: opts.global === true,
+    project: opts.project === true,
+    claude: opts.claude === true,
+    agents: opts.agents === true,
+    target: opts.target ?? null,
+  };
+}
+
+function addSkillTargetOptions(command: Command): Command {
+  return command
+    .option("--global", "target the home directory (~/.claude, ~/.agents)")
+    .option("--project", "target the current Git worktree root")
+    .option("--claude", "target .claude/skills (Claude Code)")
+    .option("--agents", "target .agents/skills (Agent Skills standard)")
+    .option("--target <path>", "also use this skills directory (it holds glia/SKILL.md)");
+}
+
+const skill = program
+  .command("skill")
+  .description("install or remove the bundled glia agent skill (SKILL.md)");
+addSkillTargetOptions(
+  skill
+    .command("install")
+    .description("install the glia SKILL.md so coding agents know how to use glia"),
+)
+  .option("--force", "overwrite a differing SKILL.md without prompting")
+  .action(async (opts: SkillCliOptions) => {
+    await execute("skill.install", (flags) =>
+      runSkillInstall(
+        { cwd: process.cwd(), homeDir: homedir(), inputDisabled: flags.inputDisabled },
+        { ...skillTargetFlags(opts), force: opts.force === true },
+      ),
+    );
+  });
+addSkillTargetOptions(
+  skill.command("remove").description("remove installed glia SKILL.md copies"),
+).action(async (opts: SkillCliOptions) => {
+  await execute("skill.remove", (flags) =>
+    runSkillRemove(
+      { cwd: process.cwd(), homeDir: homedir(), inputDisabled: flags.inputDisabled },
+      skillTargetFlags(opts),
+    ),
+  );
+});
 
 program
   .command("status")

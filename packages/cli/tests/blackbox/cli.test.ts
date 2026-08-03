@@ -483,4 +483,25 @@ describe("compiled CLI contract", () => {
     expect(doc.result.build.version).toBe("0.0.1");
     expect(doc.result.build.commit).toMatch(/^(unknown|[0-9a-f]{4,40}(-dirty)?)$/);
   });
+
+  test("skill install writes the embedded SKILL.md from the compiled binary", async () => {
+    const home = join(env.root, "skill-home");
+    await mkdir(home, { recursive: true });
+    const run = await gliaAt({ worktree: env.worktree, env: { ...env.env, HOME: home } }, [
+      "--json",
+      "skill",
+      "install",
+    ]);
+    expect(run.exitCode).toBe(0);
+    const doc = JSON.parse(run.stdout) as {
+      ok: boolean;
+      result: { skill: string; version: string; results: { path: string; status: string }[] };
+    };
+    expect(doc.ok).toBeTrue();
+    expect(doc.result.skill).toBe("glia");
+    expect(doc.result.results.map((r) => r.status)).toEqual(["created", "created"]);
+    const content = await Bun.file(join(home, ".claude", "skills", "glia", "SKILL.md")).text();
+    expect(content).toContain("name: glia");
+    expect(content).toContain(`glia_version: ${doc.result.version}`);
+  });
 });
