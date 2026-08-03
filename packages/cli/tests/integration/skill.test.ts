@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CLI_VERSION } from "../../src/core/build-info.ts";
 import {
@@ -102,6 +102,24 @@ describe("skill install", () => {
     expect(await exists(skillFileAt(globalClaude()))).toBe(false);
   });
 
+  test("a blank --target is a USAGE error, not an install into the cwd", async () => {
+    await expect(
+      runSkillInstall(ctx(), { ...noFlags(), target: "  ", force: false }),
+    ).rejects.toMatchObject({ code: "USAGE" });
+    expect(await exists(join(env.worktree, "glia", "SKILL.md"))).toBe(false);
+  });
+
+  test("a symlinked skill directory is refused instead of written through", async () => {
+    const elsewhere = join(env.root, "elsewhere");
+    await mkdir(join(home, ".claude", "skills"), { recursive: true });
+    await mkdir(elsewhere, { recursive: true });
+    await symlink(elsewhere, join(home, ".claude", "skills", "glia"));
+    await expect(
+      runSkillInstall(ctx(), { ...noFlags(), claude: true, force: false }),
+    ).rejects.toMatchObject({ code: "USAGE" });
+    expect(await exists(join(elsewhere, "SKILL.md"))).toBe(false);
+  });
+
   test("declining the overwrite confirmation cancels and changes nothing", async () => {
     await runSkillInstall(ctx(), { ...noFlags(), force: false });
     await writeFile(skillFileAt(globalClaude()), "edited by hand", "utf8");
@@ -144,6 +162,33 @@ describe("skill remove", () => {
     const result = outcome.json as { results: unknown[] };
     expect(result.results).toEqual([]);
     expect(outcome.human).toContain("not installed");
+  });
+
+  test("a hand-written skill named glia is left alone, files intact", async () => {
+    const foreignDir = join(globalClaude(), "glia");
+    await mkdir(foreignDir, { recursive: true });
+    await writeFile(join(foreignDir, "SKILL.md"), "---\nname: glia\n---\nmy own skill", "utf8");
+    await writeFile(join(foreignDir, "reference.md"), "keep me", "utf8");
+
+    const noFlagOutcome = await runSkillRemove(ctx(), noFlags());
+    expect((noFlagOutcome.json as { results: unknown[] }).results).toEqual([]);
+
+    const flagged = await runSkillRemove(ctx(), { ...noFlags(), claude: true });
+    const result = flagged.json as { results: { status: string }[] };
+    expect(result.results.map((r) => r.status)).toEqual(["unmanaged"]);
+    expect(await exists(join(foreignDir, "SKILL.md"))).toBe(true);
+    expect(await exists(join(foreignDir, "reference.md"))).toBe(true);
+  });
+
+  test("removal keeps sibling files the user added beside glia's SKILL.md", async () => {
+    await runSkillInstall(ctx(), { ...noFlags(), claude: true, force: false });
+    const dir = join(globalClaude(), "glia");
+    await writeFile(join(dir, "notes.md"), "user notes", "utf8");
+    const outcome = await runSkillRemove(ctx(), { ...noFlags(), claude: true });
+    const result = outcome.json as { results: { status: string }[] };
+    expect(result.results[0]!.status).toBe("removed");
+    expect(await exists(join(dir, "SKILL.md"))).toBe(false);
+    expect(await exists(join(dir, "notes.md"))).toBe(true);
   });
 
   test("interactive removal honors the picked subset", async () => {

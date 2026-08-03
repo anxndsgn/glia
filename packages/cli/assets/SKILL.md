@@ -38,7 +38,7 @@ Key options:
 - `--since <iso>`: events at or after an ISO 8601 date or timestamp.
 - `-C, --context <n>`: neighboring events around each match; `--per-session <n>` and `--limit <n>` widen result windows; `--sort relevance|time`; `--include-archived` adds Archived Sessions.
 
-Each JSON match carries `sessionId`, `eventSeq`, an excerpt, and a `locator` (`{sourceFile, sourceCursor}`) pointing into the Session's captured source bundle — cite it when quoting evidence. Matches can come from subagent transcripts inside a parent Session; they are marked, and `--filter subagent` slices to exactly that evidence.
+Each JSON match carries `sessionId`, `eventSeq`, and a `locator` (`{sourceFile, sourceCursor}`) pointing into the Session's captured source bundle — cite it when quoting evidence. Text-query results (`"mode": "text"`) add an `excerpt`; `--file`-only results (`"mode": "file_touches"`) carry the touch's `operation` and `sourcePath` instead. Matches can come from subagent transcripts inside a parent Session; they are marked, and `--filter subagent` slices to exactly that evidence.
 
 ### Read a Session: `glia list`, `glia show`, `glia view`
 

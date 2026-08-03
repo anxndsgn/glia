@@ -1,11 +1,11 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { lstat, mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import { CLI_VERSION } from "../build-info.ts";
 import { confirmProceed } from "../output/confirm.ts";
 import { GliaError } from "../output/errors.ts";
 import type { CommandOutcome } from "../output/result.ts";
 import { resolveWorktreeTopLevel } from "../project/resolve.ts";
-import { renderSkillContent, SKILL_NAME } from "../skill/content.ts";
+import { isManagedSkillContent, renderSkillContent, SKILL_NAME } from "../skill/content.ts";
 import {
   ALL_HARNESSES,
   ALL_SCOPES,
@@ -45,15 +45,18 @@ export interface SkillInstallFlags extends SkillTargetFlags {
 }
 
 type InstallStatus = "created" | "updated" | "up_to_date";
-type RemoveStatus = "removed" | "not_installed";
+type RemoveStatus = "removed" | "not_installed" | "unmanaged";
 
 function cancelled(verb: string): GliaError {
   return new GliaError("CANCELLED", `skill ${verb} cancelled; nothing was changed`);
 }
 
 function targetDestination(cwd: string, target: string): SkillDestination {
-  const skillsDir = isAbsolute(target) ? resolve(target) : resolve(cwd, target);
-  return { scope: null, harness: null, skillsDir };
+  const trimmed = target.trim();
+  if (trimmed.length === 0) {
+    throw new GliaError("USAGE", "--target requires a non-empty skills directory path");
+  }
+  return { scope: null, harness: null, skillsDir: resolve(cwd, trimmed) };
 }
 
 function skillFile(destination: SkillDestination): string {
@@ -66,6 +69,20 @@ async function readIfExists(path: string): Promise<string | null> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
+  }
+}
+
+/** A symlinked destination would redirect the write outside the chosen
+ * directory (worse under --force / --no-input, where nothing confirms);
+ * refuse it instead of following it. Absence is fine. */
+async function assertNoSymlink(path: string): Promise<void> {
+  try {
+    if ((await lstat(path)).isSymbolicLink()) {
+      throw new GliaError("USAGE", `refusing to write through a symlink at ${path}`, { path });
+    }
+  } catch (error) {
+    if (error instanceof GliaError) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 
@@ -210,6 +227,8 @@ export async function runSkillInstall(
   for (const plan of plans) {
     if (plan.status === "up_to_date") continue;
     const dir = join(plan.destination.skillsDir, SKILL_NAME);
+    await assertNoSymlink(dir);
+    await assertNoSymlink(join(dir, "SKILL.md"));
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SKILL.md"), content, "utf8");
   }
@@ -226,8 +245,14 @@ export async function runSkillInstall(
   };
 }
 
-async function installedAt(destination: SkillDestination): Promise<boolean> {
-  return (await readIfExists(skillFile(destination))) !== null;
+type InstallState = "managed" | "foreign" | "absent";
+
+/** What sits at the destination: a glia-written SKILL.md, someone else's
+ * skill that merely shares the name, or nothing. */
+async function installState(destination: SkillDestination): Promise<InstallState> {
+  const content = await readIfExists(skillFile(destination));
+  if (content === null) return "absent";
+  return isManagedSkillContent(content) ? "managed" : "foreign";
 }
 
 export async function runSkillRemove(
@@ -252,7 +277,7 @@ export async function runSkillRemove(
     );
     const detected: SkillDestination[] = [];
     for (const candidate of candidates) {
-      if (await installedAt(candidate)) detected.push(candidate);
+      if ((await installState(candidate)) === "managed") detected.push(candidate);
     }
     if (detected.length === 0) {
       return {
@@ -278,16 +303,28 @@ export async function runSkillRemove(
 
   const results: { destination: SkillDestination; status: RemoveStatus }[] = [];
   for (const destination of selected) {
-    const installed = await installedAt(destination);
-    if (installed)
-      await rm(join(destination.skillsDir, SKILL_NAME), { recursive: true, force: true });
-    results.push({ destination, status: installed ? "removed" : "not_installed" });
+    const state = await installState(destination);
+    if (state !== "managed") {
+      results.push({ destination, status: state === "foreign" ? "unmanaged" : "not_installed" });
+      continue;
+    }
+    // Delete only the file glia wrote; the directory goes only once empty,
+    // so anything else living beside the SKILL.md survives the removal.
+    const dir = join(destination.skillsDir, SKILL_NAME);
+    await assertNoSymlink(dir);
+    await rm(join(dir, "SKILL.md"), { force: true });
+    await rmdir(dir).catch(() => {});
+    results.push({ destination, status: "removed" });
   }
 
   return {
     json: { skill: SKILL_NAME, results: jsonRows(results) },
     human:
       "glia skill removal\n" +
-      statusRows(results, ctx.homeDir, { removed: "removed", not_installed: "not installed" }),
+      statusRows(results, ctx.homeDir, {
+        removed: "removed",
+        not_installed: "not installed",
+        unmanaged: "left alone (not glia-managed)",
+      }),
   };
 }

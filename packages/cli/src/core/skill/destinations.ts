@@ -8,6 +8,7 @@
  */
 
 import { join } from "node:path";
+import { GliaError } from "../output/errors.ts";
 
 export type SkillScope = "global" | "project";
 export type SkillHarness = "claude" | "agents";
@@ -55,7 +56,9 @@ export function skillsDirFor(
   worktree: string | null,
 ): string {
   const base = scope === "global" ? homeDir : worktree;
-  if (base === null) throw new Error("project scope requires a worktree root");
+  if (base === null) {
+    throw new GliaError("NOT_A_GIT_WORKTREE", "project scope requires a Git worktree root");
+  }
   return join(base, harness === "claude" ? ".claude" : ".agents", "skills");
 }
 
