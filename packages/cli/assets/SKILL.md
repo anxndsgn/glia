@@ -53,6 +53,8 @@ glia --json view <session-id> --seq 120     # one event rendered in full (detail
 
 Typical loop: `search` to find matching events → `view --seq <n>` (or `--from <n>` with `--tail`) to read the full context → cite the Session ID and locator.
 
+If a search returns zero matches, inspect `result.advisories` before concluding that no evidence exists. Relay every advisory to the user: how many Candidates are importable, how many are pending Project association, and how many are withheld (including the oldest `oldestFirstFlaggedAt` and any retention warning). Ask whether the user wants to run an import. **Do not run `import` yourself:** even a zero-result search or an importable advisory is diagnosis, not consent.
+
 ### Discover what could be imported: `glia candidates`
 
 ```sh
@@ -81,4 +83,6 @@ glia --json status                          # Project, Store, Binding, Session c
 - `NOT_A_GIT_WORKTREE`: run glia from inside the project repository.
 - `INPUT_REQUIRED`: the command wanted a confirmation while input was disabled — re-run with the suggested flag (usually `--yes`).
 - Query results include `result.projection` with the Store commit; `"stale": true` means the projection is rebuilding — re-run the query to get the fresh view.
+- `status` reports machine-global and Project-local hook liveness. If the machine stamp is `null`/`never`, the SessionEnd hooks have never fired (or have not been trusted); ask the user to run `glia setup` and approve the hook in each Harness. If the machine stamp is current but the Project stamp is absent, no Session has ended in this Project since setup.
+- Withheld advisories mean Secret Detection kept source bytes out of the Store. Relay the count, age, and retention warning; accepting flagged bytes remains the user's explicit decision.
 - Any error's `details.nextSteps` lists the exact commands to recover with; follow them before improvising.

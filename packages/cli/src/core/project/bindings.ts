@@ -1,9 +1,10 @@
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { realpathSync } from "node:fs";
 import { mkdir, readdir } from "node:fs/promises";
-import { dirname } from "node:path";
 import { projectPaths } from "./paths.ts";
+import { resolveWorktreeTopLevel } from "./resolve.ts";
 import { requireSupportedSchemaVersion } from "../state/schema-version.ts";
+import { GliaError } from "../output/errors.ts";
 
 export const BINDINGS_SCHEMA_VERSION = 1;
 
@@ -61,15 +62,34 @@ function isWithin(root: string, path: string): boolean {
 }
 
 export function bindingsContain(bindings: Bindings, path: string): boolean {
+  return bindingMatchLength(bindings, path) !== null;
+}
+
+/** Length of the most-specific bound root/alias containing this path. */
+export function bindingMatchLength(bindings: Bindings, path: string): number | null {
   const candidate = normalizeBoundPath(path);
-  return (
-    bindings.roots.some((root) => isWithin(normalizeBoundPath(root), candidate)) ||
-    bindings.aliases.some((alias) => isWithin(normalizeBoundPath(alias), candidate))
+  const matches = [...bindings.roots, ...bindings.aliases]
+    .map(normalizeBoundPath)
+    .filter((root) => isWithin(root, candidate));
+  return matches.length === 0 ? null : Math.max(...matches.map((root) => root.length));
+}
+
+/** Exact worktree admission, distinct from Opening Path containment. */
+export function bindingsBindWorktree(bindings: Bindings, worktree: string): boolean {
+  const candidate = normalizeBoundPath(worktree);
+  return [...bindings.roots, ...bindings.aliases].some(
+    (path) => normalizeBoundPath(path) === candidate,
   );
 }
 
 export interface PathMapping {
   projectId: string;
+}
+
+export interface OpeningPathResolution {
+  /** False when the path vanished before any exact historical Binding proved ownership. */
+  resolved: boolean;
+  mapping: PathMapping | null;
 }
 
 /**
@@ -78,8 +98,8 @@ export interface PathMapping {
  * Reading the Bindings under GLIA_HOME is O(Projects) file I/O, so a caller
  * mapping many Opening Paths — discovery classifying every candidate —
  * shares one index rather than rescanning per path. Bindings are read on
- * demand and memoized by file, preserving the first-match-wins order and
- * never reading a Project the lookups never reach.
+ * demand and memoized by file. The most-specific root wins, so an explicitly
+ * bound nested worktree cannot also be claimed by its bound parent.
  */
 export class BindingIndex {
   readonly #home: string;
@@ -102,7 +122,7 @@ export class BindingIndex {
   async #ids(): Promise<string[]> {
     if (this.#projectIds === null) {
       try {
-        this.#projectIds = await readdir(join(this.#home, "projects"));
+        this.#projectIds = (await readdir(join(this.#home, "projects"))).sort();
       } catch {
         this.#projectIds = [];
       }
@@ -115,11 +135,70 @@ export class BindingIndex {
    * GLIA_HOME. Returns the owning Project when a Binding claims the path.
    */
   async mapPath(openingPath: string): Promise<PathMapping | null> {
+    let best: { projectId: string; length: number } | null = null;
     for (const projectId of await this.#ids()) {
       const bindings = await this.read(projectPaths(this.#home, projectId).bindingsFile);
-      if (bindings && bindingsContain(bindings, openingPath)) {
-        return { projectId };
+      if (bindings) {
+        const length = bindingMatchLength(bindings, openingPath);
+        if (
+          length !== null &&
+          (best === null ||
+            length > best.length ||
+            (length === best.length && projectId < best.projectId))
+        ) {
+          best = { projectId, length };
+        }
       }
+    }
+    return best === null ? null : { projectId: best.projectId };
+  }
+
+  /**
+   * Maps the exact Git worktree containing an Opening Path. Containment alone
+   * is insufficient: an independent, unbound repository nested below a bound
+   * root has not opted in and must not be inherited by its parent Project.
+   */
+  async resolveOpeningPath(openingPath: string): Promise<OpeningPathResolution> {
+    let probe = openingPath;
+    let missing = false;
+    for (;;) {
+      try {
+        // Current filesystem truth wins over stale historical Bindings. If a
+        // deleted child path is later reused as an ordinary parent directory,
+        // Git resolves the parent worktree and the old child Binding cannot
+        // capture new Sessions at that path.
+        const worktree = await resolveWorktreeTopLevel(probe);
+        if (missing) return { resolved: false, mapping: null };
+        return { resolved: true, mapping: await this.mapWorktree(worktree) };
+      } catch (error) {
+        if (error instanceof GliaError && error.code === "NOT_A_GIT_WORKTREE") {
+          return { resolved: !missing, mapping: null };
+        }
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      }
+
+      missing = true;
+      // The probed path is absent. A formerly bound child worktree may have
+      // disappeared in full, so its exact lexical Binding outranks whichever
+      // surviving parent Git would resolve after the next climb.
+      const exact = await this.mapWorktree(probe);
+      if (exact !== null) return { resolved: true, mapping: exact };
+      const parent = dirname(probe);
+      if (parent === probe) return { resolved: false, mapping: null };
+      probe = parent;
+    }
+  }
+
+  async mapOpeningPath(openingPath: string): Promise<PathMapping | null> {
+    return (await this.resolveOpeningPath(openingPath)).mapping;
+  }
+
+  /** Finds the Binding whose root/alias is exactly this Git worktree. */
+  async mapWorktree(worktree: string): Promise<PathMapping | null> {
+    for (const projectId of await this.#ids()) {
+      const bindings = await this.read(projectPaths(this.#home, projectId).bindingsFile);
+      if (bindings && bindingsBindWorktree(bindings, worktree)) return { projectId };
     }
     return null;
   }
@@ -131,4 +210,11 @@ export async function mapPathToProject(
   openingPath: string,
 ): Promise<PathMapping | null> {
   return await new BindingIndex(home).mapPath(openingPath);
+}
+
+export async function mapWorktreeToProject(
+  home: string,
+  worktree: string,
+): Promise<PathMapping | null> {
+  return await new BindingIndex(home).mapWorktree(worktree);
 }

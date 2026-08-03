@@ -5,15 +5,20 @@ import {
   type SecretHit,
   type UnscannedFile,
 } from "../../core/security/secret-detection.ts";
+import type { SourceIdentity } from "./identity.ts";
 
 /** The format-aware rules are shared; captured Source Bundle traversal
  * and persisted Candidate evaluation remain Session responsibilities. */
 export * from "../../core/security/secret-detection.ts";
 
 export interface PersistedEvaluation {
+  /** Present on evaluations written by import automation; absent on legacy state. */
+  identity?: SourceIdentity;
   bundleDigest: string;
   rulesetVersion: number;
   evaluatedAt: string;
+  /** Stable across continuous re-evaluations while the Candidate remains withheld. */
+  firstFlaggedAt?: string;
   hits: SecretHit[];
   unscanned: UnscannedFile[];
 }

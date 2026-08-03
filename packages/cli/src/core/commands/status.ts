@@ -4,6 +4,7 @@ import type { CommandOutcome } from "../output/result.ts";
 import { readBindings } from "../project/bindings.ts";
 import { countPreservedItems, readDeletionPending } from "../store/deletion.ts";
 import { readSyncState } from "../store/sync-state.ts";
+import { ageDays } from "../../session/domain/advisories.ts";
 
 /** `glia status` is read-only after Project resolution and never touches the network. */
 export async function runStatus(
@@ -60,6 +61,33 @@ export async function runStatus(
     )
     .join(" ");
   lines.push(`  session: ${detailText}`);
+  const withheld = sessionStatus.detail["withheldCandidates"] as
+    | { count?: number; oldestFirstFlaggedAt?: string | null; retentionWarning?: boolean }
+    | undefined;
+  if ((withheld?.count ?? 0) > 0) {
+    const days = ageDays(withheld!.oldestFirstFlaggedAt!);
+    const age = days === 0 ? "less than a day" : `${days} day(s)`;
+    lines.push(
+      `  withheld: ${withheld!.count} candidate(s), oldest withheld for ${age} (first flagged ${withheld!.oldestFirstFlaggedAt})` +
+        (withheld!.retentionWarning ? "; Harness retention may delete the source" : ""),
+    );
+  }
+  const lost = sessionStatus.detail["lostWithheldCandidates"] as { count?: number } | undefined;
+  if ((lost?.count ?? 0) > 0) {
+    lines.push(`  withheld source loss: ${lost!.count} candidate(s)`);
+  }
+  const hooks = sessionStatus.detail["hookLiveness"] as
+    | {
+        machineLastRunAt?: string | null;
+        projectLastRunAt?: string | null;
+        projectLastOutcome?: string | null;
+      }
+    | undefined;
+  lines.push(
+    `  hook last run (machine): ${hooks?.machineLastRunAt ?? "never"}`,
+    `  hook last import (Project): ${hooks?.projectLastRunAt ?? "never"}` +
+      (hooks?.projectLastOutcome ? ` (${hooks.projectLastOutcome})` : ""),
+  );
 
   return {
     json: {

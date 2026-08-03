@@ -9,6 +9,10 @@ import { readSyncState } from "../../src/core/store/sync-state.ts";
 import { readDeletionPending } from "../../src/core/store/deletion.ts";
 import { parseLedgerFile } from "../../src/session/domain/deletion.ts";
 import { readDiscoveryState } from "../../src/session/domain/discovery-state.ts";
+import {
+  appendWithheldLosses,
+  readWithheldLosses,
+} from "../../src/session/domain/withheld-loss.ts";
 import { ensureProjection, readCurrentPointer } from "../../src/session/projection/publish.ts";
 import { PROJECTION_VERSION } from "../../src/session/projection/schema.ts";
 import { runImport } from "../../src/session/domain/import.ts";
@@ -94,6 +98,28 @@ describe("STATE_TOO_NEW: state written by a newer Glia names the binary, not the
     const file = join(env.root, "too-new-discovery.json");
     await writeJson(file, { schemaVersion: 7, ignored: [], associations: {}, evaluations: {} });
     await expect(readDiscoveryState(file)).rejects.toMatchObject({ code: "STATE_TOO_NEW" });
+  });
+
+  test("withheld loss state refuses downgrade writes", async () => {
+    const file = join(env.root, "too-new-withheld-loss.json");
+    const future = {
+      schemaVersion: 2,
+      records: [{ futureSentinel: "must survive" }],
+    };
+    await writeJson(file, future);
+
+    await expect(readWithheldLosses(file)).rejects.toMatchObject({ code: "STATE_TOO_NEW" });
+    await expect(
+      appendWithheldLosses(file, [
+        {
+          candidateId: "ses_new",
+          identity: { harnessId: "codex", sourceSessionId: "new" },
+          firstFlaggedAt: "2026-08-01T00:00:00.000Z",
+          prunedAt: "2026-08-03T00:00:00.000Z",
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "STATE_TOO_NEW" });
+    expect(JSON.parse(await Bun.file(file).text())).toEqual(future);
   });
 
   test("the message carries the versions and the upgrade remedy", async () => {

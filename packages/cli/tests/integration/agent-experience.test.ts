@@ -454,6 +454,7 @@ describe("candidate discovery, bounded", () => {
     // A pending candidate (no Opening Path), an out-of-scope one, and an
     // ignored one join the already-imported associated candidates.
     await writeCodexSession(env.codexHome, { sessionId: "cand-pending", cwd: null });
+    await mkdir(join(env.root, "elsewhere", "other-project"), { recursive: true });
     await writeClaudeSession(env.claudeHome, {
       sessionId: "cand-outside",
       cwd: join(env.root, "elsewhere", "other-project"),

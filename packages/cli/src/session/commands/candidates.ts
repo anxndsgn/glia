@@ -14,6 +14,7 @@ import {
   shortSessionTime,
 } from "./candidate-display.ts";
 import { truncate } from "../../core/output/terminal.ts";
+import { renderWithheldBanner, withheldAdvisoryFromState } from "../domain/advisories.ts";
 
 const DEFAULT_LIMIT = 50;
 /** Display cap for the label column in human rows. */
@@ -37,6 +38,7 @@ type DetectionReport =
       rulesetVersion: number;
       bundleDigest: string;
       evaluatedAt: string;
+      firstFlaggedAt: string;
       suspectedSecrets: PersistedEvaluation["hits"];
       unscanned: PersistedEvaluation["unscanned"];
     };
@@ -84,6 +86,7 @@ export const candidatesCommand: CommandDefinition = {
         rulesetVersion: evaluation.rulesetVersion,
         bundleDigest: evaluation.bundleDigest,
         evaluatedAt: evaluation.evaluatedAt,
+        firstFlaggedAt: evaluation.firstFlaggedAt ?? evaluation.evaluatedAt,
         suspectedSecrets: evaluation.hits,
         unscanned: evaluation.unscanned,
       };
@@ -149,6 +152,8 @@ export const candidatesCommand: CommandDefinition = {
         `${counts.out_of_scope} out of scope, ${counts.pending} pending, ${counts.ignored} ignored, ` +
         `${counts.tombstoned} tombstoned.`,
     ];
+    const withheld = withheldAdvisoryFromState(state);
+    if (withheld !== null) lines.push(renderWithheldBanner(withheld));
     const explicitStatuses = statuses.length > 0;
     // The default form expands only actionable entries; an explicit
     // --status selection lists what it asked for.

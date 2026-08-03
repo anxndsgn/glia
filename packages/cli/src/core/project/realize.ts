@@ -20,6 +20,7 @@ export async function realizeProject(
     if (declaredRemote === null) await store.init(projectId);
   }
 
+  // loadProject holds the machine-global Binding lease across realization.
   const bindings = (await readBindings(paths.bindingsFile)) ?? emptyBindings(projectId);
   const root = normalizeBoundPath(worktree);
   if (!bindings.roots.includes(root)) bindings.roots.push(root);

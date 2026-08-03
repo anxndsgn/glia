@@ -1,6 +1,6 @@
-import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { readdir } from "node:fs/promises";
+import { claudeHome } from "../../../core/harnesses/home.ts";
 import { asObject, asString, readJsonlLines } from "../jsonl.ts";
 import { LABEL_PAYLOAD_KEY, META_PAYLOAD_KEY, sessionLabel } from "../label.ts";
 import { captureAllowlisted, directoryExists, touch } from "../capture.ts";
@@ -323,9 +323,7 @@ function titleOf(
   }
 }
 
-function claudeConfigDir(env: Record<string, string | undefined>): string {
-  return env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude");
-}
+const claudeConfigDir = claudeHome;
 
 async function sortedSubdirectories(path: string): Promise<string[]> {
   const entries = await readdir(path, { withFileTypes: true });
