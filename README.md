@@ -9,6 +9,7 @@ It supports Claude Code and Codex source Sessions. Import, query, archive, delet
 - Bun 1.3 or newer
 - Git
 - A Bun runtime with SQLite FTS5 support
+- run `npx skills add anxndsgn/skills` to add the skills
 
 ## Development
 
