@@ -1,6 +1,6 @@
 import { git, gitOrThrow } from "./git.ts";
 
-/** The remote-tracking ref sessioning the last fetched remote state. */
+/** The remote-tracking ref recording the last fetched remote state. */
 export const REMOTE_TRACKING_REF = "refs/remotes/origin/main";
 
 const REMOTE_TRACKING_URL_KEY = "glia.remoteTrackingUrl";
@@ -21,7 +21,7 @@ export async function readRemoteTrackingHead(
 }
 
 /**
- * Sessions a fetched head and associates that evidence with its credential-free
+ * Records a fetched head and associates that evidence with its credential-free
  * declaration. The ref moves first, so an interrupted association write can
  * only hide evidence, never attribute stale evidence to another remote.
  */

@@ -15,8 +15,9 @@ export async function realizeProject(
 
   const store = new ProjectStore(paths.storeDir);
   if (!(await store.exists()) && (declaredRemote === null || !options.allowMissingStore)) {
-    // A declared remote is never contacted implicitly. Non-sync commands
-    // receive a typed refusal from loadProject after local realization.
+    // A declared remote is never contacted implicitly. Commands that do
+    // not pass `allowMissingStore` receive a typed refusal from
+    // loadProject after local realization.
     if (declaredRemote === null) await store.init(projectId);
   }
 

@@ -47,7 +47,7 @@ export async function storedWithheldAdvisory(
   return withheldAdvisoryFromState(await readDiscoveryState(project.paths.discoveryFile), now);
 }
 
-/** Full-discovery counts used by zero-result search and status. */
+/** Full-discovery counts used by zero-result search, status, and the enrollment banner. */
 export async function advisoriesForDiscovery(
   project: LoadedProject,
   discovery: DiscoveryResult,

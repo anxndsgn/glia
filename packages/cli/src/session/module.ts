@@ -84,7 +84,7 @@ export const sessionModule: SessionModule<SessionConfig> = {
     };
   },
 
-  /** A Revision is one atomic whole: the Session directory is the divergence unit. */
+  /** A Revision is one atomic whole: the Session directory is the divergence unit, and the archive marker directory is its own (mergeable) unit. */
   storeUnitFor(path: string): string | null {
     if (path === SESSION_ARCHIVE_DIR || path.startsWith(`${SESSION_ARCHIVE_DIR}/`)) {
       return SESSION_ARCHIVE_DIR;
@@ -129,8 +129,7 @@ export const sessionModule: SessionModule<SessionConfig> = {
   /**
    * The deletion Store-integrity hook: ledger format and merge rule,
    * event-to-purge-path mapping, export-shaped bystander preservation,
-   * and machine-local collapse. Core invokes it regardless of enablement,
-   * so a disabled Session module never blocks deletion propagation.
+   * and machine-local collapse.
    */
   deletion: {
     ledgerDir: SESSION_LEDGER_DIR,

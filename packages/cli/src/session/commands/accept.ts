@@ -28,7 +28,7 @@ export const acceptCommand: CommandDefinition = {
   arguments: [
     {
       name: "[candidate-id...]",
-      description: "stable Candidate IDs reported by `session candidates`",
+      description: "stable Candidate IDs reported by `glia candidates`",
     },
   ],
   options: [
@@ -60,7 +60,7 @@ export const acceptCommand: CommandDefinition = {
     if (!interactive && explicitIds.length === 0) {
       throw new GliaError(
         "USAGE",
-        "session accept requires at least one <candidate-id>, or --interactive to pick from a list",
+        "glia accept requires at least one <candidate-id>, or --interactive to pick from a list",
       );
     }
     if (interactive && (ctx.jsonMode || ctx.inputDisabled)) {
@@ -265,7 +265,7 @@ async function confirmTargets(
     if (tombstoned) {
       sections.push(
         `This Source Identity was deleted at ${classification.deletedAt} by replica ${classification.deletedBy} (epoch ${classification.epoch}).\n` +
-          "Re-admitting it as a fresh Session sessions the override in the Session's metadata.",
+          "Re-admitting it as a fresh Session records the override in the Session's metadata.",
       );
     }
     if (flagged) {
@@ -273,7 +273,7 @@ async function confirmTargets(
       const hits = renderSuspectedHits(evaluation.hits, evaluation.unscanned).join("\n");
       sections.push(
         `${candidateDisplayLabel(candidate)} (${candidateId}) is flagged:\n${hits}\n` +
-          "Accepting sessions the override in the Session's metadata.",
+          "Accepting records the override in the Session's metadata.",
       );
     }
     const proceeding = await confirmProceed(`${sections.join("\n\n")}\n\nAccept this Candidate?`);
@@ -317,7 +317,7 @@ async function pickInteractive(
         `${shortSessionTime(entry.candidate.sessionTime)}  ` +
         `${flagged ? "⚠ " : ""}${candidateDisplayLabel(entry.candidate)}`,
       description: flagged
-        ? `flagged: ${hitCount} suspected secret(s) — accepting sessions the override · ` +
+        ? `flagged: ${hitCount} suspected secret(s) — accepting records the override · ` +
           `${entry.candidate.identity.harnessId} ${entry.candidate.identity.sourceSessionId}`
         : `${entry.candidate.identity.harnessId} ${entry.candidate.identity.sourceSessionId}`,
       group: "",

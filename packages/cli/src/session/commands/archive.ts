@@ -68,8 +68,8 @@ function commandFor(nextState: ArchiveState): CommandDefinition {
       const lines = [
         `${nextState === "archived" ? "Archived" : "Unarchived"} session ${sessionId}.`,
         nextState === "archived"
-          ? "It is hidden from default `session list` and `session search` results; direct addressing still works."
-          : "It is visible in default `session list` and `session search` results again.",
+          ? "It is hidden from default `glia list` and `glia search` results; direct addressing still works."
+          : "It is visible in default `glia list` and `glia search` results again.",
         "Only shared query metadata changed; the Session evidence and Store history were not removed, and no space was reclaimed.",
         `Store commit ${report.storeCommit.slice(0, 12)}.`,
       ];

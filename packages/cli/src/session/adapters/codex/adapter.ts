@@ -28,11 +28,11 @@ const TRANSCRIPT_BUNDLE_PATH = "source/transcript.jsonl";
  *
  * Source-native behavior this adapter depends on (validated against
  * Codex Desktop 0.144 rollouts):
- * - The first `session_meta` session carries the stable Session ID
+ * - The first `session_meta` record carries the stable Session ID
  *   (`payload.id`, mirrored as `payload.session_id`) and the Opening Path
  *   (`payload.cwd`).
  * - Current Codex versions resume by appending further `session_meta`
- *   sessions to the same rollout file, so the whole file stays one Session
+ *   records to the same rollout file, so the whole file stays one Session
  *   identified by its first meta. A resume that instead creates a new file
  *   with `resumed_from` becomes its own Session with continuation metadata
  *   (kept as contract; no non-null `resumed_from` observed in real
@@ -68,7 +68,7 @@ export const codexAdapter: SessionHarnessAdapter = {
       if (!sessionId) continue;
       const resumedFrom = payload ? asString(payload["resumed_from"]) : null;
       const identity = { harnessId: "codex" as const, sourceSessionId: sessionId };
-      // Codex rollouts session no session title; the earliest user message
+      // Codex rollouts record no session title; the earliest user message
       // is the only source-provided Label the format offers.
       const firstUserText = isSubagentSession(payload)
         ? null
@@ -202,7 +202,7 @@ function subagentOrigin(meta: Record<string, unknown> | null): SubagentOrigin | 
 /**
  * Modern Codex rollouts mirror source-authored input as an
  * `event_msg.user_message`. Harness context still travels through user-role
- * `response_item` sessions, but has no matching event message. Prefer this
+ * `response_item` records, but has no matching event message. Prefer this
  * source distinction over an open-ended list of injected preamble strings.
  */
 function sourceAuthoredUserMessages(
@@ -387,7 +387,7 @@ function projectEventMsg(
 }
 
 /**
- * Codex patch events objectively session per-path add/update/delete changes.
+ * Codex patch events objectively record per-path add/update/delete changes.
  * Current rollouts use `{ "<path>": { type: "add" | "delete" | "update" } }`;
  * older shapes nest the kind as `{ add: {...} }` keys. Both are handled.
  */

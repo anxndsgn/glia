@@ -19,7 +19,7 @@ export function shortSessionTime(iso: string | null): string {
   return " ".repeat(SHORT_TIME_WIDTH);
 }
 
-/** The Session Label when the source sessions one, else the Source Identity. */
+/** The Session Label when the source records one, else the Source Identity. */
 export function candidateDisplayLabel(candidate: SessionCandidate): string {
   return (
     candidate.label ?? `(${candidate.identity.harnessId} ${candidate.identity.sourceSessionId})`

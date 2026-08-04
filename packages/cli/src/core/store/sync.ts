@@ -192,7 +192,7 @@ export async function runSync(
       }
 
       const emptyTree = await emptyTreeOf(storeDir);
-      // Independent diffs over two ranges; one round-trip, not two.
+      // Independent diffs over two ranges; run concurrently, one wait.
       const [pulled, pushed] = await Promise.all([
         countUnits(storeDir, modules, startLocalHead, head, state.conflicted),
         countUnits(storeDir, modules, state.startRemoteHead ?? emptyTree, head, state.conflicted),

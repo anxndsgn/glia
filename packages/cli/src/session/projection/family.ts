@@ -15,7 +15,7 @@ export interface FamilyFacts {
 
 /**
  * Detects Fork Families from the events and sessions just projected and
- * sessions them in `session_families`. Two edge kinds connect Sessions of
+ * records them in `session_families`. Two edge kinds connect Sessions of
  * one Harness: at least one pair of identity-sharing events, or a
  * source-provided Continuation naming the other's source Session. A
  * family is a connected component over both kinds; a component of one

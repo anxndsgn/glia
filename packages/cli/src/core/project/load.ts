@@ -16,7 +16,7 @@ import { realizeProject } from "./realize.ts";
 import { resolveWorktreeTopLevel } from "./resolve.ts";
 
 export interface LoadProjectOptions {
-  /** Sync uses this to adopt a declared remote before a local Store exists. */
+  /** `sync` and `store remote set` use this to proceed against a declared remote before a local Store exists. */
   allowMissingStore?: boolean;
 }
 

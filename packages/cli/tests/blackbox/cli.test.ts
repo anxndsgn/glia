@@ -224,7 +224,7 @@ describe("compiled CLI contract", () => {
     expect(doc.error.code).toBe("NOT_ENROLLED");
   });
 
-  test("session view honors the CLI output contract: human default, one JSON document, USAGE exit", async () => {
+  test("glia view honors the CLI output contract: human default, one JSON document, USAGE exit", async () => {
     await writeClaudeSession(env.claudeHome, { sessionId: "aaaa-1", cwd: env.worktree });
     const imported = await glia(["--json", "import"]);
     const sessionId = (

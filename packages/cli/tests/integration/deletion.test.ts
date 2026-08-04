@@ -168,7 +168,7 @@ describe("session deletion (local operation)", () => {
     const outcome = await deleteCommand.run(ctxOf(project, envA.env), [sessionId], { yes: true });
     const report = outcome.json as Record<string, unknown>;
     expect(report["epoch"]).toBe(1);
-    // 14. Every deletion output states the limitation verbatim.
+    // Every deletion output states the limitation verbatim.
     expect(report["limitation"]).toBe(DELETION_LIMITATION);
     expect(outcome.human).toContain(DELETION_LIMITATION);
 
@@ -184,7 +184,7 @@ describe("session deletion (local operation)", () => {
       await historyContains(project.paths.storeDir, "unmistakable payload of keep-1"),
     ).toBeTrue();
 
-    // 2. The ledger event carries exactly the five fields; no digests.
+    // The ledger event carries exactly the five fields; no digests.
     const ledgerText = await Bun.file(
       join(project.paths.storeDir, ledgerFilePath(sessionId)),
     ).text();
@@ -204,7 +204,7 @@ describe("session deletion (local operation)", () => {
     expect(Object.keys(events[0]!).sort()).toEqual(["deletedAt", "epoch", "replicaId"]);
     expect(ledgerText).not.toContain("digest");
 
-    // 18. The first deletion bumps storeFormatVersion in the same commit.
+    // The first deletion bumps storeFormatVersion in the same commit.
     const marker = (await readLocalStoreMarker(project.paths.storeDir))!;
     expect(marker.storeFormatVersion).toBe(STORE_FORMAT_VERSION);
     expect(marker.epoch).toBe(1);
@@ -386,7 +386,7 @@ describe("session deletion (propagation protocol)", () => {
     const purge = [`session/sessions/${sessionId}`];
     const blobOnB = await blobShaOf(projectB.paths.storeDir, transcriptPath(projectB, sessionId));
 
-    // 4. Byte-identical recomputation: both replicas' pure rewrites agree.
+    // Byte-identical recomputation: both replicas' pure rewrites agree.
     const imageOnA = (await rewriteHistoryPurging(projectA.paths.storeDir, headBefore, purge))
       .newHead;
     const imageOnB = (await rewriteHistoryPurging(projectB.paths.storeDir, headBefore, purge))
@@ -401,13 +401,13 @@ describe("session deletion (propagation protocol)", () => {
     const statusA = await runStatus(projectA, sessionModules, envA.env);
     expect(statusA.human).toContain("propagation pending");
 
-    // 10. Pushing fetches the not-yet-rewritten remote (payload transiently
+    // Pushing fetches the not-yet-rewritten remote (payload transiently
     // re-materializes) and purges it again before reporting success.
     const pushReport = await sync(projectA, envA.env);
     expect(pushReport.deletion?.eventsPushed).toBe(1);
     expect(await historyContains(projectA.paths.storeDir, needle)).toBeFalse();
 
-    // 3. The receiving replica verifies, applies, and retains nothing.
+    // The receiving replica verifies, applies, and retains nothing.
     const reportB = await sync(projectB, b.env);
     expect(reportB.deletion?.eventsApplied).toBe(1);
     expect(reportB.deletion?.epochBefore).toBe(0);
@@ -417,7 +417,7 @@ describe("session deletion (propagation protocol)", () => {
     expect(await headOf(projectA)).toBe(await headOf(projectB));
     expect(await projectionSessionIds(projectB, b.env)).toEqual([sessionIdOfSession("prop-2")]);
 
-    // 26. Convergence is stable: repeating sync changes nothing anywhere.
+    // Convergence is stable: repeating sync changes nothing anywhere.
     expect((await sync(projectA, envA.env)).classification).toBe("up_to_date");
     expect((await sync(projectB, b.env)).classification).toBe("up_to_date");
     expect((await readLocalStoreMarker(projectB.paths.storeDir))!.epoch).toBe(1);
@@ -674,7 +674,7 @@ describe("session deletion (propagation protocol)", () => {
     const status = await runStatus(projectB, sessionModules, b.env);
     expect(status.human).toContain("preserved: 1 bystander item(s)");
 
-    // 23. A second round preserves into its own layout.
+    // A second round preserves into its own layout.
     await writeClaudeSession(b.claudeHome, {
       sessionId: "by-2",
       cwd: b.worktree,
@@ -810,7 +810,7 @@ describe("session deletion (lifecycle after deletion)", () => {
     await sync(projectA, envA.env);
     await sync(projectB, b.env);
 
-    // 13. Deleted is distinguishable from never-existed.
+    // Deleted is distinguishable from never-existed.
     await expect(showCommand.run(ctxOf(projectA, envA.env), [sessionId], {})).rejects.toThrow(
       expect.objectContaining({ code: "SESSION_DELETED" }) as Error,
     );
@@ -824,7 +824,7 @@ describe("session deletion (lifecycle after deletion)", () => {
       }),
     ).rejects.toThrow(expect.objectContaining({ code: "NOT_FOUND" }) as Error);
 
-    // 12. Discovery still finds the source; import skips it without failing.
+    // Discovery still finds the source; import skips it without failing.
     for (const [project, env] of [
       [projectA, envA.env],
       [projectB, b.env],
@@ -837,7 +837,7 @@ describe("session deletion (lifecycle after deletion)", () => {
       expect(classified.classification.kind).toBe("tombstoned");
     }
 
-    // `session tombstones` lists the ledger events.
+    // `glia tombstones` lists the ledger events.
     const tombstones = await tombstonesCommand.run(ctxOf(projectA, envA.env), [], {});
     expect((tombstones.json as { events: unknown[] }).events).toHaveLength(1);
     expect(tombstones.human).toContain(sessionId);
@@ -928,7 +928,7 @@ describe("session deletion (lifecycle after deletion)", () => {
     );
   });
 
-  test("tombstoned takes precedence over flagged; explicit re-acceptance re-runs detection and sessions both overrides", async () => {
+  test("tombstoned takes precedence over flagged; explicit re-acceptance re-runs detection and records both overrides", async () => {
     const project = await initProject(envA);
     await writeClaudeSession(envA.claudeHome, {
       sessionId: "sec-1",
@@ -953,7 +953,7 @@ describe("session deletion (lifecycle after deletion)", () => {
     const classified = discovery.candidates.find((c) => c.candidate.candidateId === sessionId)!;
     expect(classified.classification.kind).toBe("tombstoned");
 
-    // Explicit re-acceptance re-runs detection and sessions both overrides.
+    // Explicit re-acceptance re-runs detection and records both overrides.
     const accepted = await acceptCommand.run(ctxOf(project, envA.env), [sessionId], { yes: true });
     expect((accepted.json as { accepted: unknown[] }).accepted).toHaveLength(1);
     const meta = (await readSessionMeta(project.paths.storeDir, sessionId))!;

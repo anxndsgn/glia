@@ -199,7 +199,7 @@ export async function writeConflictLayout(
 }
 
 /**
- * Selects the candidate `session resolve` promotes. A digest prefix is
+ * Selects the candidate `glia resolve` promotes. A digest prefix is
  * accepted when it selects one digest unambiguously. Two candidates may
  * share one digest — identical bundles accepted independently on two
  * machines — and the acceptance metadata is then chosen

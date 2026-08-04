@@ -106,7 +106,6 @@ export interface StoreDeletionHook {
   onDeletionApplied(project: LoadedProject, events: StoreDeletionEvent[]): Promise<void>;
 }
 
-/** The built-in Session vertical and the Store-integrity hooks core uses. */
 /**
  * Reported by any command whose write succeeded but whose
  * `rebuildProjection` did not: the operation stands, the projection is
@@ -115,6 +114,7 @@ export interface StoreDeletionHook {
 export const PROJECTION_DEFERRED_NOTE =
   "Projection rebuild deferred; the next query will rebuild it.";
 
+/** The built-in Session vertical and the Store-integrity hooks core uses. */
 export interface SessionModule<TConfig = unknown> {
   readonly id: string;
   readonly description: string;

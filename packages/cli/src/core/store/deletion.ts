@@ -209,7 +209,7 @@ export async function rewriteHistoryPurging(
 }
 
 /**
- * Builds the commit sessioning ledger events and the epoch increment on
+ * Builds the commit recording ledger events and the epoch increment on
  * top of `parent`, aside via a temporary index — the working tree and
  * every reference stay untouched until the caller's atomic switch.
  */

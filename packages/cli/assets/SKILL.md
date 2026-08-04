@@ -29,7 +29,7 @@ Glia captures complete coding-agent Sessions (Claude Code and Codex transcripts)
 ```sh
 glia --json search "authentication failure"          # text query; terms match as substrings
 glia --json search auth --word                       # whole words only: skips authored/authorization
-glia --json search --file session-layout.ts          # Sessions that touched a file
+glia --json search --file auth.ts                    # Sessions that touched a file
 glia --json search "retry" --filter toolcall --since 2026-07-01 -C 2
 ```
 
@@ -37,7 +37,7 @@ Key options:
 
 - `--word`: terms match only at word boundaries (ASCII letters, digits, `_`), so a short term stops hitting every identifier containing it; CJK terms keep substring matching. Reach for it whenever a plain query drowns in token-family noise.
 - `--filter <value>` (repeatable, values union): `user`, `agent`, `toolcall`, `toolcall:<name>`, `toolresult`, `message`, `lifecycle`, `system`, `unknown`, `subagent`.
-- `--file <path>`: matches a touched path exactly, or as whole trailing path segments (`session-layout.ts` matches `src/storage/session-layout.ts`).
+- `--file <path>`: matches a touched path exactly, or as whole trailing path segments (`auth.ts` matches `src/lib/auth.ts`).
 - `--since <iso>`: events at or after an ISO 8601 date or timestamp.
 - `-C, --context <n>`: neighboring events around each match; `--per-session <n>` and `--limit <n>` widen result windows; `--sort relevance|time`; `--include-archived` adds Archived Sessions.
 
@@ -84,6 +84,7 @@ glia --json status                          # Project, Store, Binding, Session c
 
 - `STORE_NOT_REALIZED`: the Project declares a remote but has no local Store yet — run `glia sync` first.
 - `NOT_A_GIT_WORKTREE`: run glia from inside the project repository.
+- `NOT_ENROLLED`: the worktree resolves but no Project is enrolled here. `view`/`show`/`export` fail with this code (with `nextSteps: ["glia import"]`), while `list`/`search` still answer, reporting `enrolled: false` and a `not_enrolled` advisory. Enrollment happens through an import — ask the user before running one.
 - `INPUT_REQUIRED`: the command wanted a confirmation while input was disabled — re-run with the suggested flag (usually `--yes`).
 - Query results include `result.projection` with the Store commit; `"stale": true` means the projection is rebuilding — re-run the query to get the fresh view.
 - `status` reports machine-global and Project-local hook liveness. If the machine stamp is `null`/`never`, the SessionEnd hooks have never fired (or have not been trusted); ask the user to run `glia setup` and approve the hook in each Harness. If the machine stamp is current but the Project stamp is absent, no Session has ended in this Project since setup.

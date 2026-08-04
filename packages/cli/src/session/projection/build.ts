@@ -196,7 +196,7 @@ function subagentTranscriptCount(bundle: StoredSourceBundle): number {
  * Harness-provided title event where the adapter attests one, otherwise the
  * Session's earliest user message. Harness-injected user-role evidence is
  * not the user speaking and never becomes a Label. A Session is re-titled by
- * sessioning another title line, so the latest line of a title kind is the
+ * recording another title line, so the latest line of a title kind is the
  * title the Harness currently carries; the earliest user message is the
  * opening one, so it keeps the first. The precedence below decides between
  * kinds.

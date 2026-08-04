@@ -51,7 +51,7 @@ const TRANSCRIPT_BUNDLE_PATH = "source/transcript.jsonl";
  *   new session file with a new session ID, copying the shared prefix
  *   events with `uuid`, `timestamp`, and `message` intact while rewriting
  *   envelope fields (`sessionId` always; `gitBranch`, `cwd`, `attachment`
- *   sometimes) and sessioning no `parentSessionId` (validated against
+ *   sometimes) and recording no `parentSessionId` (validated against
  *   Claude Code desktop transcripts, 2026-07). Each source session ID
  *   stays one Session; fork twins are related through Shared Event
  *   Identity at the projection layer.
@@ -91,7 +91,7 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
         let firstUserText: string | null = null;
         // Titles appear anywhere in the file, so the whole scan runs; the
         // lines are already in memory, so this costs no extra I/O. A
-        // re-titled Session sessions another title line, so the latest one
+        // re-titled Session records another title line, so the latest one
         // of a kind is the title the source currently carries.
         for (const line of lines) {
           const value = line.value;
@@ -298,7 +298,7 @@ async function subagentTypeOf(
 }
 
 /**
- * The Session titles Claude Code sessions as their own transcript lines: a
+ * The Session titles Claude Code records as their own transcript lines: a
  * user-authored `custom-title`, a Harness-generated `ai-title`, and the
  * compaction `summary`. Read exactly as persisted — never combined, never
  * rewritten.
@@ -387,7 +387,7 @@ function extractText(message: Record<string, unknown> | null): string | null {
 }
 
 /**
- * Claude Code sessions tool invocations as `tool_use` content blocks whose
+ * Claude Code records tool invocations as `tool_use` content blocks whose
  * `name` is the source-native tool name (built-in shell is the `Bash`
  * tool, patching is `Edit`/`Write`), so the blocks are the attestation.
  */
@@ -403,7 +403,7 @@ function extractToolNames(message: Record<string, unknown> | null): string[] {
 
 /**
  * A File Touch requires an objective source event. Assistant `Read` tool
- * calls objectively session reads; Claude Code tool results carry a
+ * calls objectively record reads; Claude Code tool results carry a
  * `toolUseResult` with the written file and whether it was created or
  * updated. Bash commands and textual path mentions never become touches.
  */

@@ -261,12 +261,6 @@ export function tombstoneSummaries(events: StoreDeletionEvent[]): TombstoneSumma
 }
 
 /**
- * The absent-Session answer. Scripts must distinguish "never existed" from
- * "deleted": a tombstoned Source Identity answers SESSION_DELETED, and only
- * an unknown one answers NOT_FOUND. Every reading surface throws this so
- * the two codes can never drift apart.
- */
-/**
  * Resolves the Session's Source Identity for a mutation preview: the
  * Store must be realized, and a Session missing outright answers with
  * `missingSessionError`. A conflict-frozen Session has no Current
@@ -299,6 +293,12 @@ export async function resolveSessionIdentity(
   return { meta, conflict, ...identity };
 }
 
+/**
+ * The absent-Session answer. Scripts must distinguish "never existed" from
+ * "deleted": a tombstoned Source Identity answers SESSION_DELETED, and only
+ * an unknown one answers NOT_FOUND. Every reading surface throws this so
+ * the two codes can never drift apart.
+ */
 export async function missingSessionError(storeDir: string, sessionId: string): Promise<GliaError> {
   const events = await ledgerEventsFor(storeDir, sessionId);
   const last = events[events.length - 1];

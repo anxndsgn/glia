@@ -40,7 +40,7 @@ export function canonicalContainerBytes(
   const unknownKeys = Object.keys(content)
     .filter((key) => !registry.includes(key))
     .sort();
-  // Every nested object serializes with lexicographic keys, which covers
+  // Every nested object serializes with lexicographic keys, which makes
   // map-valued fields and unknown-key values deterministic too.
   for (const key of [...registryKeys, ...unknownKeys]) {
     ordered[key] = sortedValue(content[key]);

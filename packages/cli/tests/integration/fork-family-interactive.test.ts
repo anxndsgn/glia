@@ -92,7 +92,7 @@ async function copiedTwin(
   return { dir, copied };
 }
 
-describe("interactive session import family hint", () => {
+describe("interactive glia import family hint", () => {
   test("the fork-family note renders before the flagged and pending decision prompts", async () => {
     const cwd = testEnv.worktree;
     await writeClaudeSession(testEnv.claudeHome, {
@@ -163,7 +163,7 @@ describe("interactive session import family hint", () => {
     );
   });
 
-  test("session accept shows the family hint before confirmation and Store mutation", async () => {
+  test("glia accept shows the family hint before confirmation and Store mutation", async () => {
     await writeClaudeSession(testEnv.claudeHome, {
       sessionId: "accept-origin",
       cwd: testEnv.worktree,
@@ -235,7 +235,7 @@ describe("interactive session import family hint", () => {
     expect(await readSessionMeta(project.paths.storeDir, twinId)).toBeNull();
 
     // The next interactive import re-presents the flagged Candidate;
-    // accepting sessions the override in the Session's metadata.
+    // accepting records the override in the Session's metadata.
     selectMessages = [];
     selectAnswers = ["accept"];
     const second = await importCommand.run(interactiveCtx(), [], {});

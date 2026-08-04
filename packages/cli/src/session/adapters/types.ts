@@ -18,7 +18,7 @@ export interface SessionCandidate {
   openingPath: string | null;
   /** Absolute source paths in the adapter's explicit allowlist. */
   sourceFiles: SourceFileRef[];
-  /** Objective continuation metadata when the source sessions it. */
+  /** Objective continuation metadata when the source records it. */
   continuation: { parentSessionId: string } | null;
   /**
    * Present when the source marks this Session as a Harness-spawned
@@ -40,7 +40,7 @@ export interface SessionCandidate {
    * Session Label: a source-provided, human-readable identifier — a
    * Harness-provided title when the source carries one, otherwise the
    * Session's earliest user message. Display metadata only, read from
-   * source evidence, never generated; null when the source sessions neither.
+   * source evidence, never generated; null when the source records neither.
    */
   label: string | null;
 }

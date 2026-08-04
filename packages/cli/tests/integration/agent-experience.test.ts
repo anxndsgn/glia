@@ -29,9 +29,10 @@ let ctx: CommandRunContext;
 const dupSessionId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "dup-main" });
 const sortNullSessionId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "sort-null" });
 
-// The listing and timeline verbs omit their defaults, so every field these
-// shapes mark optional is one whose absence carries meaning: a singleton
-// `memberSeqs`, an event with no text.
+// The listing and timeline verbs omit their defaults, so the fields these
+// shapes mark optional may lawfully be absent — a singleton `memberSeqs`,
+// an event with no text. (`timestamp` and `excerpt` are in practice always
+// present on text matches; json-economy.test.ts pins that key set.)
 interface SearchMatchJson {
   sessionId: string;
   eventSeq: number;
@@ -214,9 +215,7 @@ describe("--file matching rule", () => {
   test("the --file help text states the rule with an example", () => {
     const fileOption = searchCommand.options?.find((o) => o.flags.includes("--file"));
     expect(fileOption?.description).toContain("whole trailing path segments");
-    expect(fileOption?.description).toContain(
-      "session-session.md matches docs/spec/session-session.md",
-    );
+    expect(fileOption?.description).toContain("auth.ts matches src/lib/auth.ts");
   });
 });
 
@@ -376,7 +375,7 @@ describe("--sort", () => {
   });
 });
 
-describe("session list", () => {
+describe("glia list", () => {
   test("shows event time ranges, orders by latest event time, and falls back honestly", async () => {
     const outcome = await listCommand.run(ctx, [], {});
     const json = outcome.json as {
@@ -386,8 +385,8 @@ describe("session list", () => {
     const ids = json.sessions.map((r) => r.sessionId);
     const sortA = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "sort-a" });
     const sortB = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "sort-b" });
-    // sort-a's Session ran latest (2026-07-16); it outranks Sessions whose
-    // Sessions ended earlier, whatever order acceptance happened in.
+    // sort-a ran latest (2026-07-16); it outranks Sessions whose events
+    // ended earlier, whatever order acceptance happened in.
     expect(ids.indexOf(sortA)).toBeLessThan(ids.indexOf(dupSessionId));
     expect(ids.indexOf(dupSessionId)).toBeLessThan(ids.indexOf(sortB));
     // The timestamp-free Session groups under the placeholder, never a date.
@@ -398,8 +397,8 @@ describe("session list", () => {
     expect(lines[nullAt]).toContain("2 events");
     expect(headerAbove(nullAt)).toBe("no event timestamps");
     expect(lines[0]).toStartWith(`${json.totalSessions} session(s),`);
-    // A dated Session groups under its Session's last date, not its
-    // acceptance date, and carries an earlier Session start on its own row.
+    // A dated Session groups under its last event date, not its acceptance
+    // date, and carries an earlier Session start on its own row.
     const datedAt = lines.findIndex((l) => l.trim().startsWith(sortA));
     expect(headerAbove(datedAt)).toBe("2026-07-16");
     expect(lines[datedAt]).toContain("from 2026-07-15");
@@ -410,7 +409,7 @@ describe("session list", () => {
     const sortA = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "sort-a" });
     const json = outcome.json as { sessions: { sessionId: string; label: string | null }[] };
     const labelled = json.sessions.find((r) => r.sessionId === sortA)!;
-    // sort-a sessions no title, so its Label is the Session's own opening
+    // sort-a records no title, so its Label is the Session's own opening
     // user message — read from evidence, never generated.
     expect(labelled.label).toBe("opening question for sort-a");
     expect(outcome.human).toContain("opening question for sort-a");

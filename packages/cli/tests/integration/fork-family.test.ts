@@ -720,12 +720,12 @@ describe("Session Fork Family", () => {
     expect(JSON.stringify(dry.json)).not.toContain("fork family");
     expect(JSON.stringify(dry.json)).not.toContain("familyHint");
 
-    // session candidates never parses for family hints either.
+    // glia candidates never parses for family hints either.
     const candidates = await candidatesCommand.run(ctx, [], {});
     expect(candidates.human).not.toContain("fork family");
     expect(JSON.stringify(candidates.json)).not.toContain("familyHint");
 
-    // session import's per-Session report lines carry the note.
+    // glia import's per-Session report lines carry the note.
     const report = await importAll();
     expect(report.accepted).toHaveLength(1);
     const hint = report.accepted[0]!.familyHint;
@@ -739,7 +739,7 @@ describe("Session Fork Family", () => {
     expect(hint!.withSessionLabel).toBe("HINTPROBE shared prefix");
     expect(humanImportReport(report)).toContain("fork family");
 
-    // session accept names the same overlap: the largest-overlap stored
+    // glia accept names the same overlap: the largest-overlap stored
     // Session, ties by ascending Session ID, further related Sessions counted.
     await writeForkTwin("hint-origin", "hint-twin-2", WHOLE_FILE);
     const best = [origin, recId("hint-twin")].sort()[0]!;

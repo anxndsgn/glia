@@ -63,7 +63,7 @@ function mergeRanges(ranges: Range[]): Range[] {
   return merged;
 }
 
-/** The bounded view: whole text when it fits, else centered on the first match. */
+/** The bounded view: whole text when it fits, else anchored a little left of the first match. */
 function pickWindow(collapsed: string, ranges: Range[]): Range {
   if (collapsed.length <= EXCERPT_MAX_WIDTH) return { start: 0, end: collapsed.length };
   const anchor = ranges[0]?.start ?? 0;

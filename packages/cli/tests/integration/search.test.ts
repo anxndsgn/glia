@@ -121,7 +121,7 @@ beforeAll(async () => {
     ],
   });
 
-  // A twin produced by resume: its source sessions a continuation parent.
+  // A twin produced by resume: its source records a continuation parent.
   await writeClaudeSession(env.claudeHome, {
     sessionId: "search-child",
     cwd,
@@ -257,7 +257,7 @@ afterAll(async () => {
   await env.cleanup();
 });
 
-describe("session search retrieval", () => {
+describe("glia search retrieval", () => {
   test("a two-character Chinese query finds text on the scan path", async () => {
     const { json } = await run(["投影"]);
     expect(json.totalMatches).toBe(1);
@@ -299,7 +299,7 @@ describe("session search retrieval", () => {
   });
 });
 
-describe("session search output", () => {
+describe("glia search output", () => {
   test("a multi-line source match renders as one bounded line", async () => {
     const { json, human } = await run(["MULTITOKEN"]);
     const excerpt = json.matches[0]!.excerpt!;
@@ -372,7 +372,7 @@ describe("session search output", () => {
   });
 });
 
-describe("session search --word", () => {
+describe("glia search --word", () => {
   test("--word keeps only word-bounded matches on the index path", async () => {
     const plain = await run(["wbtok"]);
     expect(plain.json.totalMatches).toBe(3);
@@ -418,7 +418,7 @@ describe("session search --word", () => {
   });
 });
 
-describe("session search --filter", () => {
+describe("glia search --filter", () => {
   test("speaker slices select only messages with that speaker", async () => {
     const asUser = await run(["TRANSPORTPROBE"], { filter: ["user"] });
     expect(asUser.json.totalMatches).toBe(0); // user-role envelope, but a tool output
@@ -483,7 +483,7 @@ describe("session search --filter", () => {
   });
 });
 
-describe("session search --file listing", () => {
+describe("glia search --file listing", () => {
   test("file-touch output groups, caps, and filters mechanically", async () => {
     const all = await run([undefined], { file: "tests/auth.test.ts" });
     expect(all.json.mode).toBe("file_touches");

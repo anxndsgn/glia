@@ -1,6 +1,6 @@
 /**
  * Option parsing and rendering primitives shared by the Session reading
- * surfaces. `session search` and `session view` must stay aligned with each
+ * surfaces. `glia search` and `glia view` must stay aligned with each
  * other — same USAGE wording, same excerpt renderer, same label column —
  * so these live in one place rather than per command.
  */
@@ -12,7 +12,8 @@ import type { ClassifiedCandidate } from "../domain/classify.ts";
 /**
  * Candidate order wherever they are listed or offered: most recent first,
  * undated last, ties broken by Candidate ID so the order is stable across
- * runs and identical between `candidates` and the interactive picker.
+ * runs. The interactive picker applies it directly; `candidates` groups by
+ * classification rank first and falls back to it within a rank.
  */
 export function byRecency(a: ClassifiedCandidate, b: ClassifiedCandidate): number {
   const timeA = a.candidate.sessionTime;

@@ -39,15 +39,16 @@ export function createProjectionSchema(db: Database): void {
       label TEXT,
       label_source TEXT,
       label_seq INTEGER,
-      -- Subagent facts, read from source evidence. The first two describe
-      -- a Session that *is* a Harness-spawned subagent (Codex); the third
-      -- counts subagent transcripts a Session *carries* (Claude Code).
-      -- The parent is the parent's source Session ID, resolved to a Session
-      -- ID at query time only when that parent is itself imported; NULL
-      -- means the source stated none, never that one was guessed.
-      -- Whether the source marked this Session a subagent at all. Kind and
-      -- parent are both optional, so their NULLs cannot carry the fact: a
-      -- rollout stating only thread_source=subagent is still a subagent.
+      -- Subagent facts, read from source evidence. subagent_origin is
+      -- whether the source marked this Session a subagent at all (Codex);
+      -- kind and parent are both optional, so their NULLs cannot carry the
+      -- fact: a rollout stating only thread_source=subagent is still a
+      -- subagent. subagent_kind is the source-native kind when named.
+      -- subagent_parent is the parent's source Session ID, resolved to a
+      -- Session ID at query time only when that parent is itself imported;
+      -- NULL means the source stated none, never that one was guessed.
+      -- subagent_count counts subagent transcripts a Session *carries*
+      -- (Claude Code).
       subagent_origin INTEGER NOT NULL DEFAULT 0,
       subagent_kind TEXT,
       subagent_parent TEXT,
@@ -79,8 +80,8 @@ export function createProjectionSchema(db: Database): void {
     );
     CREATE INDEX idx_events_session_seq ON events(session_id, seq);
     CREATE INDEX idx_events_kind ON events(kind);
-    -- Fork Family detection self-joins events on canonical Shared Event
-    -- Identity at build time.
+    -- Canonical Shared Event Identity lookups: family edge derivation at
+    -- build time and twin resolution at query time both key on this column.
     CREATE INDEX idx_events_identity_key ON events(identity_key);
     -- Fork Families: connected components of Sessions linked by Shared
     -- Event Identity or source-provided Continuation edges, computed at
@@ -111,7 +112,7 @@ export function createProjectionSchema(db: Database): void {
     CREATE INDEX idx_touches_paths ON file_touches(source_path, normalized_path);
     CREATE TABLE event_tool_names (
       event_id INTEGER NOT NULL REFERENCES events(event_id),
-      -- Harness-attested tool name, stored as attested: session view
+      -- Harness-attested tool name, stored as attested: glia view
       -- renders it back. Matching stays case-insensitive on the full
       -- name through the folded column (SQLite LOWER is ASCII-only).
       name TEXT NOT NULL,

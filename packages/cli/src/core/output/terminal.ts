@@ -239,37 +239,6 @@ export function truncateLabel(text: string, viewport: Viewport = {}): string {
   return truncate(oneLine(text), Math.max(MIN_DESCRIPTION_COLUMN, columns - GUTTER - 1));
 }
 
-/** How many names a summary line spells out before it starts counting. */
-const SUMMARY_NAMES = 6;
-
-/**
- * A result line lists what happened without becoming a wall of text: the
- * first few names, then a count of the rest. Nothing is lost — the `--json`
- * document carries every name, and the lock sessions every entry.
- */
-export function summarizeNames(names: string[], limit = SUMMARY_NAMES): string {
-  if (names.length === 0) return "";
-  if (names.length <= limit) return names.join(", ");
-  return `${names.slice(0, limit).join(", ")} and ${names.length - limit} more`;
-}
-
-/**
- * Paths that share a parent directory read as one entry with a count:
- * `.claude/skills/ (22), .agents/skills/ (22)`. Directory order follows first
- * appearance, so the caller's ordering still shows through.
- */
-export function summarizePaths(paths: string[]): string {
-  const byParent = new Map<string, number>();
-  for (const path of paths) {
-    const normalized = path.replaceAll("\\", "/");
-    const cut = normalized.lastIndexOf("/");
-    const parent = cut === -1 ? "." : `${normalized.slice(0, cut)}/`;
-    byParent.set(parent, (byParent.get(parent) ?? 0) + 1);
-  }
-  if (byParent.size === 1 && paths.length <= SUMMARY_NAMES) return paths.join(", ");
-  return [...byParent].map(([parent, count]) => `${parent} (${count})`).join(", ");
-}
-
 /** Width of the name column for a two-column list: as wide as the longest
  * name, but never at the cost of the description's floor, and never past its
  * own ceiling. The name is what the user addresses a row by, so it is clipped

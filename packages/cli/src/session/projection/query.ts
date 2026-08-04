@@ -41,7 +41,7 @@ export interface SessionRow extends SubagentColumns {
 /**
  * What a Session states about subagents, in the two directions a Session
  * can relate to one: it either *is* a Harness-spawned subagent (Codex, so
- * `subagentKind` is set) or it *carries* subagent transcripts inside its
+ * `subagentOrigin` is set) or it *carries* subagent transcripts inside its
  * own evidence (Claude Code, so `subagentCount` is above zero).
  */
 export interface SubagentColumns {
@@ -452,7 +452,7 @@ function orderGroups<R extends MatchedRow>(groups: R[][], sort: SearchSort): R[]
  * Session IDs; `totalMatches` counts the collapsed match once, and the
  * suppressed copies are reported as `familyCollapsedMatches`. Collapse
  * never drops distinct content: only strict identity-sharing events
- * collapse, and every copy stays reachable through `session view`.
+ * collapse, and every copy stays reachable through `glia view`.
  */
 function finishSearch<
   R extends MatchedRow,

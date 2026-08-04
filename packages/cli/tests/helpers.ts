@@ -65,11 +65,6 @@ export async function initAt(worktree: string, home: string): Promise<LoadedProj
   return project;
 }
 
-/** Realize machine-local identity and bindings without contacting a remote. */
-export async function installAt(worktree: string, home: string): Promise<void> {
-  await loadProject(worktree, home, { allowMissingStore: true });
-}
-
 export async function initProject(
   testEnv: TestEnv,
   worktree = testEnv.worktree,
@@ -291,7 +286,8 @@ export interface CodexSessionSpec {
    * `true` writes the observed `{ other: <name> }` shape. An object writes
    * the shape the modern multi-agent rollouts carry, including
    * `parent_thread_id` when a parent is stated; `nestedKind` selects the
-   * `{ other: … }` spelling over the plain string.
+   * `{ other: … }` spelling over the plain string. `{ bare: true }` writes
+   * only `thread_source` — a subagent naming neither kind nor parent.
    */
   subagent?:
     | boolean

@@ -29,7 +29,7 @@ export interface SkillCommandContext {
   prompts?: SkillPrompts;
 }
 
-/** Each returns null on cancel; the caller words the CANCELLED error. */
+/** The pickers return null on cancel and `confirmOverwrite` false; the caller words the CANCELLED error. */
 export interface SkillPrompts {
   pickScope(): Promise<SkillScope | null>;
   pickHarnesses(): Promise<SkillHarness[] | null>;

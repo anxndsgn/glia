@@ -122,7 +122,7 @@ export class GroupedPicker {
     this.grouped = this.groups.some((g) => g.group !== "");
   }
 
-  /** The rows on screen, folded folders excluded. */
+  /** The rows on screen; a folded folder keeps its header row but hides its members. */
   get rows(): Row[] {
     if (!this.grouped) return this.items.map((item) => ({ kind: "item", item }) as Row);
     const rows: Row[] = [];
@@ -144,7 +144,7 @@ export class GroupedPicker {
     this.cursor = (this.cursor + delta + total) % total;
   }
 
-  /** Space: an item toggles itself; a folder toggles every unit beneath it —
+  /** Space: an item toggles itself; a folder toggles every item beneath it —
    * selecting the whole folder in one key, deselecting it once it is full. */
   toggle(): void {
     const row = this.row;

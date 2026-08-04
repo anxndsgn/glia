@@ -76,9 +76,9 @@ export interface DeleteReport {
   epoch: number;
   deletedAt: string;
   storeCommit: string;
-  /** True when the deletion destroyed both candidates of a Session Conflict. */
+  /** How many candidate Revisions of a Session Conflict the deletion destroyed; 0 without one. */
   deletedConflictCandidates: number;
-  /** Non-null when a declared remote awaits propagation via `glia sync`. */
+  /** `pending_sync` when a declared remote awaits propagation via `glia sync`. */
   propagation: "pending_sync" | "local_only";
   projectionFresh: boolean;
   /** The erasure-limitation statement, verbatim. */

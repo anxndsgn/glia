@@ -4,8 +4,6 @@ import {
   hardWrap,
   listWindowSize,
   nameColumnWidth,
-  summarizeNames,
-  summarizePaths,
   symbolsFor,
   wrapLines,
 } from "../../src/core/output/terminal.ts";
@@ -204,25 +202,5 @@ describe("prompt text layout", () => {
   test("hardWrap leaves short lines, blank lines, and zero budgets alone", () => {
     expect(hardWrap("a\n\nb", 40)).toBe("a\n\nb");
     expect(hardWrap("anything at all", 0)).toBe("anything at all");
-  });
-});
-
-describe("result summaries", () => {
-  test("a short list is spelled out; a long one names a few and counts the rest", () => {
-    expect(summarizeNames([])).toBe("");
-    expect(summarizeNames(["a", "b"])).toBe("a, b");
-    const many = Array.from({ length: 22 }, (_, i) => `s${i}`);
-    expect(summarizeNames(many)).toBe("s0, s1, s2, s3, s4, s5 and 16 more");
-    expect(summarizeNames(many, 2)).toBe("s0, s1 and 20 more");
-  });
-
-  test("targets collapse to their directories with counts", () => {
-    const paths = ["x", "y"].flatMap((k) => [`.claude/skills/${k}`, `.agents/skills/${k}`]);
-    expect(summarizePaths(paths)).toBe(".claude/skills/ (2), .agents/skills/ (2)");
-    // A handful under one directory still reads better in full.
-    expect(summarizePaths([".claude/skills/x", ".claude/skills/y"])).toBe(
-      ".claude/skills/x, .claude/skills/y",
-    );
-    expect(summarizePaths([])).toBe("");
   });
 });

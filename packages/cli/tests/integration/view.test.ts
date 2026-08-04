@@ -107,7 +107,7 @@ afterAll(async () => {
   await env.cleanup();
 });
 
-describe("session view timeline", () => {
+describe("glia view timeline", () => {
   test("lists every event in seq order with filter-vocabulary labels", async () => {
     const { human, json } = await run([mainSessionId]);
     expect(json.totalEvents).toBe(8);
@@ -186,7 +186,7 @@ describe("session view timeline", () => {
   });
 });
 
-describe("session view windowing", () => {
+describe("glia view windowing", () => {
   test("windowing applies after filtering and --from resumes a capped listing", async () => {
     const first = await run([mainSessionId], { filter: ["user"], limit: "2" });
     expect(first.json.events.map((e) => e.seq)).toEqual([1, 5]);
@@ -241,7 +241,7 @@ describe("session view windowing", () => {
   });
 });
 
-describe("session view detail mode", () => {
+describe("glia view detail mode", () => {
   test("--seq renders the whole event with line structure and its full locator", async () => {
     const { human, json } = await run([mainSessionId], { seq: "6" });
     expect(json.event.seq).toBe(6);
@@ -274,7 +274,7 @@ describe("session view detail mode", () => {
   });
 });
 
-describe("session view failure modes", () => {
+describe("glia view failure modes", () => {
   test("an unknown Session ID is NOT_FOUND", async () => {
     await expect(run(["ses_00000000000000000000000000000000"])).rejects.toMatchObject({
       code: "NOT_FOUND",

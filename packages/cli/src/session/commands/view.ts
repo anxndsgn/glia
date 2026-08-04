@@ -51,7 +51,7 @@ export const viewCommand: CommandDefinition = {
   ],
   async run(ctx, args, options): Promise<CommandOutcome> {
     const sessionId = args[0];
-    if (!sessionId) throw new GliaError("USAGE", "session view requires a <session-id>");
+    if (!sessionId) throw new GliaError("USAGE", "glia view requires a <session-id>");
     const filterValues = repeatedValues(options["filter"]);
     const filters = filterValues.map(parseFilterValue);
     const limit = positiveIntOrNull(options["limit"], "--limit");

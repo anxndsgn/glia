@@ -51,13 +51,13 @@ import { appendWithheldLosses, type WithheldLossRecord } from "./withheld-loss.t
 export interface ImportOptions {
   harness: HarnessId | null;
   dryRun: boolean;
-  /** When set (session accept and interactive import follow-ups), only
+  /** When set (`glia accept` and interactive import follow-ups), only
    *  these candidates are considered for acceptance. */
   onlyCandidateIds: string[] | null;
   /**
    * Accept flagged bytes with a persisted override instead of withholding
    * them. Set only where the acceptance is itself the explicit decision
-   * (`session accept`, the interactive flagged prompt) — a restricted run
+   * (`glia accept`, the interactive flagged prompt) — a restricted run
    * that merely re-imports newly associated Candidates keeps the gate.
    */
   overrideFlagged?: boolean;
@@ -253,7 +253,7 @@ export async function runImport(
         break;
       case "tombstoned":
         // Blocked from automatic acceptance, skipped without failing;
-        // only the confirmed `session accept` override path proceeds.
+        // only the confirmed `glia accept` override path proceeds.
         if (options.onlyCandidateIds !== null && options.acceptTombstoned === true) {
           toConsider.push(classified);
         } else {
@@ -275,7 +275,7 @@ export async function runImport(
 
   // Consent-time Fork Family hints derive from the stored Sessions'
   // identity keys in the published projection; a dry run never reaches
-  // here and `session candidates` never captures, so both stay silent.
+  // here and `glia candidates` never captures, so both stay silent.
   const storedIdentities: StoredIdentityIndex =
     toConsider.length > 0
       ? await readStoredIdentities(project)
@@ -463,7 +463,7 @@ export async function runImport(
             ) {
               // Consent is for one objective deletion event. A newer event
               // that landed while this import waited needs its own explicit
-              // confirmation; never silently session an override for it with
+              // confirmation; never silently record an override for it with
               // stale epoch metadata.
               report.tombstoned.push({
                 ...candidateSummary(candidate),
@@ -1356,7 +1356,7 @@ function sessionMetaFor(item: StagedCandidate, fileCount: number): SessionMeta {
       mode: via === "explicit" ? "explicit" : "inferred",
       evidence:
         via === "explicit"
-          ? "explicit user decision (session accept)"
+          ? "explicit user decision (glia accept)"
           : `opening path ${candidate.openingPath ?? "(unknown)"} mapped through a machine-local binding`,
     },
     continuation: candidate.continuation,

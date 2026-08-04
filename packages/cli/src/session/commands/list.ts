@@ -9,7 +9,7 @@ import { subagentNote } from "./subagent-display.ts";
 import { dateRange } from "./search.ts";
 import { dimmer, padWidth, truncateWidth } from "../../core/output/terminal.ts";
 
-/** The group header for a Session the Session left without event timestamps. */
+/** The group header for a Session whose source left no event timestamps. */
 const UNDATED_GROUP = "no event timestamps";
 
 /** Row width the columns are budgeted against; the Label absorbs the slack. */

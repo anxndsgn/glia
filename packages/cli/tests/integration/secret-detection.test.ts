@@ -87,7 +87,7 @@ describe("secret detection at the acceptance boundary", () => {
     expect(JSON.stringify(report)).not.toContain(FAKE_KEY);
   });
 
-  test("session accept takes the exact flagged bytes and sessions the override", async () => {
+  test("glia accept takes the exact flagged bytes and records the override", async () => {
     const sourcePath = await writeClaudeSession(env.claudeHome, {
       sessionId: "leaky-2",
       cwd: env.worktree,

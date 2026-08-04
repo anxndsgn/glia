@@ -12,7 +12,7 @@ import type { SourceIdentity } from "./identity.ts";
 export * from "../../core/security/secret-detection.ts";
 
 export interface PersistedEvaluation {
-  /** Present on evaluations written by import automation; absent on legacy state. */
+  /** Present on every evaluation current imports write; absent only on legacy state. */
   identity?: SourceIdentity;
   bundleDigest: string;
   rulesetVersion: number;

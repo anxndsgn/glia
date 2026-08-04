@@ -29,7 +29,7 @@ export function buildInfo(): BuildInfo {
   };
 }
 
-/** The one-line human rendering shared by `--version` and `status`. */
+/** The one-line human rendering behind `--version`. */
 export function buildIdentityLine(info: BuildInfo): string {
   return `${info.version} (${info.commit} ${info.builtAt})`;
 }

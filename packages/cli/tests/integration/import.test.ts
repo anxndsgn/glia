@@ -38,7 +38,7 @@ afterEach(async () => {
 const importAll = () =>
   runImport(project, env.env, { harness: null, dryRun: false, onlyCandidateIds: null });
 
-describe("session import", () => {
+describe("glia import", () => {
   test("accepts current-project sessions from both harnesses in one commit", async () => {
     await writeClaudeSession(env.claudeHome, { sessionId: "aaaa-1", cwd: env.worktree });
     await writeCodexSession(env.codexHome, {
@@ -344,8 +344,8 @@ describe("session import", () => {
   });
 });
 
-describe("session accept", () => {
-  test("explicit association accepts a pending candidate and sessions the mode", async () => {
+describe("glia accept", () => {
+  test("explicit association accepts a pending candidate and records the mode", async () => {
     await writeCodexSession(env.codexHome, {
       sessionId: "99999999-2222-3333-4444-555555555555",
       cwd: null,

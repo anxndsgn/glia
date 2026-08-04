@@ -61,9 +61,10 @@ function importAll(target: LoadedProject = project) {
   return runImport(target, env.env, { harness: null, dryRun: false, onlyCandidateIds: null });
 }
 
-/** Starts a full import against the parent Project while its writer lease is
- *  held, applies `mutate` during the wait, then releases and returns the
- *  report. Exercises the re-check-after-lease path in one place. */
+/** Starts an import (full by default, harness-narrowed via `options`)
+ *  against the parent Project while its writer lease is held, applies
+ *  `mutate` during the wait, then releases and returns the report.
+ *  Exercises the re-check-after-lease path in one place. */
 async function withHeldLease(
   mutate: () => Promise<void>,
   options: { harness?: Parameters<typeof runImport>[2]["harness"] } = {},
@@ -1028,7 +1029,8 @@ describe("zero-result freshness advisories", () => {
     await writeDiscoveryState(project.paths.discoveryFile, state);
     await rm(source);
 
-    // A narrowed search discovery is not an import and does not prune the debt.
+    // A zero-result search runs full discovery, but it is not an import,
+    // so it does not prune the debt.
     const outcome = await searchCommand.run(
       { project, env: env.env, jsonMode: true, inputDisabled: true },
       ["no match"],

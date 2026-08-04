@@ -103,7 +103,7 @@ export async function sourceCaptureStatus(
   return changed ? "changed" : "current";
 }
 
-/** Confirms the captured bytes still exist after waiting for the writer lease. */
+/** Confirms the staged bytes still match the captured hashes after waiting for the writer lease. */
 export async function stagingMatchesCapture(
   stagingDir: string,
   captured: CapturedBundle,

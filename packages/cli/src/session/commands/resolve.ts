@@ -17,10 +17,10 @@ export const resolveCommand: CommandDefinition = {
   ],
   async run(ctx, args, options): Promise<CommandOutcome> {
     const sessionId = args[0];
-    if (!sessionId) throw new GliaError("USAGE", "session resolve requires a <session-id>");
+    if (!sessionId) throw new GliaError("USAGE", "glia resolve requires a <session-id>");
     const digest = options["revision"] !== undefined ? String(options["revision"]) : null;
     if (!digest || digest.length === 0) {
-      throw new GliaError("USAGE", "session resolve requires --revision <digest>");
+      throw new GliaError("USAGE", "glia resolve requires --revision <digest>");
     }
 
     const report = await resolveSessionConflict(ctx.project, ctx.env, sessionId, digest);

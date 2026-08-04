@@ -139,7 +139,7 @@ function mergeFollowUpReport(report: ImportReport, second: ImportReport): void {
 
 /**
  * Presents each flagged Candidate with its suspected-secret hits and asks
- * accept, skip, or ignore. Accepting re-runs the accept path, which sessions
+ * accept, skip, or ignore. Accepting re-runs the accept path, which records
  * the override in the Session's objective metadata.
  */
 async function resolveFlaggedInteractively(
@@ -168,7 +168,7 @@ async function resolveFlaggedInteractively(
         hitLines.map((line) => `  ${line}`).join("\n") +
         "\nAccept anyway?",
       options: [
-        { value: "accept", label: "Accept anyway (sessions the override)" },
+        { value: "accept", label: "Accept anyway (records the override)" },
         { value: "skip", label: "Decide later (keep flagged)" },
         { value: "ignore", label: "Ignore on this machine" },
       ],

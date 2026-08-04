@@ -47,7 +47,7 @@ export const FILTER_VOCABULARY =
 /** The `--file` matching rule, stated where the decision is made. */
 export const FILE_MATCH_RULE =
   "matches a touched path exactly, or as whole trailing path segments after a '/'" +
-  " (session-session.md matches docs/spec/session-session.md; docs/spec matches nothing)";
+  " (auth.ts matches src/lib/auth.ts; src/lib matches nothing)";
 
 const SORT_MODES = "relevance, time";
 
@@ -103,7 +103,7 @@ export const searchCommand: CommandDefinition = {
     const query = args[0] ?? null;
     const file = options["file"] !== undefined ? String(options["file"]) : null;
     if (query === null && file === null) {
-      throw new GliaError("USAGE", "session search requires a text query, --file, or both");
+      throw new GliaError("USAGE", "glia search requires a text query, --file, or both");
     }
     const word = options["word"] === true;
     if (word && query === null) {

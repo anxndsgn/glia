@@ -41,7 +41,7 @@ export class ProjectStore {
     return (await gitOrThrow(["rev-parse", "HEAD"], this.dir)).trim();
   }
 
-  /** Stages everything and creates one commit; returns the resulting head. */
+  /** Stages everything and commits when the tree changed; returns the resulting head either way. */
   async commitAll(message: string): Promise<string> {
     await gitOrThrow(["add", "-A"], this.dir);
     const status = await gitOrThrow(["status", "--porcelain"], this.dir);

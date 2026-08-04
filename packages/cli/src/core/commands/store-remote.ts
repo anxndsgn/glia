@@ -13,8 +13,8 @@ export interface StoreRemoteSetOptions {
 
 /**
  * `glia store remote set <url>` writes the optional `store.remote` field
- * of the tracked Project Declaration. Set is repeatable and previews the
- * declaration change like every other explicit declaration edit.
+ * of the tracked Project Declaration — the only command that edits it.
+ * Set is repeatable and previews the declaration change before writing.
  * Validation is offline; reachability belongs to the first sync.
  */
 export async function runStoreRemoteSet(
