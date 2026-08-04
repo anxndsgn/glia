@@ -71,17 +71,61 @@ export async function captureAllowlisted(
   return { files };
 }
 
-/** Re-hashes the live source files and compares them to a captured manifest. */
+export type SourceCaptureStatus = "current" | "changed" | "missing";
+
+/** Re-hashes live source files and distinguishes mutation from source loss. */
+export async function sourceCaptureStatus(
+  candidate: SessionCandidate,
+  captured: CapturedBundle,
+): Promise<SourceCaptureStatus> {
+  let changed = false;
+  const liveBundlePaths = new Set(candidate.sourceFiles.map((ref) => ref.bundlePath));
+  // A freshly discovered allowlist that no longer names captured evidence
+  // proves source loss even when the remaining transcript still exists.
+  if (captured.files.some((file) => !liveBundlePaths.has(file.path))) return "missing";
+  for (const ref of candidate.sourceFiles) {
+    // Missing evidence outranks a changed artifact. Inspect every source so a
+    // growing transcript cannot hide a concurrently deleted subagent file.
+    if (!(await Bun.file(ref.absolutePath).exists())) return "missing";
+    const capturedFile = captured.files.find((f) => f.path === ref.bundlePath);
+    if (!capturedFile) {
+      changed = true;
+      continue;
+    }
+    try {
+      const { sha256 } = await sha256File(ref.absolutePath);
+      if (sha256 !== capturedFile.sha256) changed = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+      throw error;
+    }
+  }
+  return changed ? "changed" : "current";
+}
+
+/** Compatibility predicate for acceptance revalidation. */
 export async function sourcesMatchCapture(
   candidate: SessionCandidate,
   captured: CapturedBundle,
 ): Promise<boolean> {
-  for (const ref of candidate.sourceFiles) {
-    const capturedFile = captured.files.find((f) => f.path === ref.bundlePath);
-    if (!capturedFile) return false;
-    if (!(await Bun.file(ref.absolutePath).exists())) return false;
-    const { sha256 } = await sha256File(ref.absolutePath);
-    if (sha256 !== capturedFile.sha256) return false;
+  return (await sourceCaptureStatus(candidate, captured)) === "current";
+}
+
+/** Confirms the captured bytes still exist after waiting for the writer lease. */
+export async function stagingMatchesCapture(
+  stagingDir: string,
+  captured: CapturedBundle,
+): Promise<boolean> {
+  for (const file of captured.files) {
+    const path = join(stagingDir, file.path);
+    if (!(await Bun.file(path).exists())) return false;
+    try {
+      const current = await sha256File(path);
+      if (current.sha256 !== file.sha256 || current.size !== file.size) return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
   }
   return true;
 }

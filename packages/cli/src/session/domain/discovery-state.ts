@@ -1,6 +1,7 @@
-import { dirname } from "node:path";
-import { mkdir } from "node:fs/promises";
 import { requireSupportedSchemaVersion } from "../../core/state/schema-version.ts";
+import type { LoadedProject } from "../../core/session-module.ts";
+import { writeJsonAtomic } from "../../core/state/atomic-file.ts";
+import { WriterLease, writerLeaseTimeoutMs } from "../../core/store/lease.ts";
 import type { PersistedEvaluation } from "./secret-detection.ts";
 
 export const DISCOVERY_STATE_SCHEMA_VERSION = 1;
@@ -78,6 +79,29 @@ export async function writeDiscoveryState(
   discoveryFile: string,
   state: DiscoveryState,
 ): Promise<void> {
-  await mkdir(dirname(discoveryFile), { recursive: true });
-  await Bun.write(discoveryFile, JSON.stringify(state, null, 2) + "\n");
+  await writeJsonAtomic(discoveryFile, state);
+}
+
+/** Serialize a short discovery-state mutation with Store/import writers. */
+export async function mutateDiscoveryState(
+  project: LoadedProject,
+  env: Record<string, string | undefined>,
+  mutate: (state: DiscoveryState) => boolean | Promise<boolean>,
+): Promise<void> {
+  const lease = await WriterLease.acquire(project.paths.writerLockFile, writerLeaseTimeoutMs(env));
+  let bindingsLease: WriterLease | null = null;
+  try {
+    // Project decisions can affect Source Identity ownership. Follow the
+    // import lock order and serialize the decision with Binding creation so a
+    // fresh exact-worktree check and its state write are one transaction.
+    bindingsLease = await WriterLease.acquire(
+      project.paths.bindingsLockFile,
+      writerLeaseTimeoutMs(env),
+    );
+    const state = await readDiscoveryState(project.paths.discoveryFile);
+    if (await mutate(state)) await writeDiscoveryState(project.paths.discoveryFile, state);
+  } finally {
+    bindingsLease?.release();
+    lease.release();
+  }
 }

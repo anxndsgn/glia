@@ -1,6 +1,6 @@
-import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { readdir } from "node:fs/promises";
+import { codexHome } from "../../../core/harnesses/home.ts";
 import { asObject, asString, readJsonlLines } from "../jsonl.ts";
 import { META_PAYLOAD_KEY, sessionLabel } from "../label.ts";
 import { captureAllowlisted, directoryExists, touch } from "../capture.ts";
@@ -413,10 +413,6 @@ function sessionIdFromFileName(path: string): string | null {
     /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
   );
   return match ? match[0] : null;
-}
-
-function codexHome(env: Record<string, string | undefined>): string {
-  return env["CODEX_HOME"] ?? join(homedir(), ".codex");
 }
 
 async function collectJsonlFiles(dir: string): Promise<string[]> {

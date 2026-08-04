@@ -9,13 +9,13 @@ import { discoverCandidates } from "../domain/discover.ts";
 import {
   associateCandidate,
   ignoreCandidate,
-  readDiscoveryState,
-  writeDiscoveryState,
+  mutateDiscoveryState,
 } from "../domain/discovery-state.ts";
 import { previewCandidateFamilies, type FamilyHint } from "../domain/family-hint.ts";
 import { familyHintText } from "./family-display.ts";
 import type { SecretHit, UnscannedFile } from "../domain/secret-detection.ts";
 import { renderSuspectedHits } from "./render-secret-hits.ts";
+import { ageDays } from "../domain/advisories.ts";
 
 export function parseHarnessOption(value: unknown): HarnessId | null {
   if (value === undefined) return null;
@@ -32,6 +32,10 @@ export const importCommand: CommandDefinition = {
     "discover Sessions, accept associated Candidates into the Store, and refresh the projection; " +
     "on a terminal, pending and flagged Candidates are resolved with prompts (skip with --no-input)",
   options: [
+    {
+      flags: "--hook",
+      description: "run the silent SessionEnd automation path (installed by glia setup)",
+    },
     { flags: "--harness <id>", description: "only inspect one harness (codex or claude-code)" },
     {
       flags: "--dry-run",
@@ -39,27 +43,37 @@ export const importCommand: CommandDefinition = {
     },
   ],
   async run(ctx, _args, options): Promise<CommandOutcome> {
+    const hook = options["hook"] === true;
+    if (hook && ctx.jsonMode) {
+      throw new GliaError("USAGE", "--hook cannot be combined with --json");
+    }
+    if (hook && (options["harness"] !== undefined || options["dryRun"] === true)) {
+      throw new GliaError("USAGE", "--hook cannot be combined with --harness or --dry-run");
+    }
     const harness = parseHarnessOption(options["harness"]);
     const dryRun = options["dryRun"] === true;
     // Interactive resolution follows the terminal: --json, --no-input, and
     // piped stdio all disable it, so scripted imports never block on a prompt.
-    const interactive = !ctx.inputDisabled && !dryRun;
+    const interactive = !hook && !ctx.inputDisabled && !dryRun;
     // Discovery walks every harness history and capture reads whole
     // bundles: on a large history this is seconds of silence otherwise.
-    const report = await withProgress(
-      ctx,
-      dryRun ? "Discovering Sessions" : "Importing Sessions",
-      (r) =>
-        r.dryRun
-          ? `Discovered ${r.wouldAccept.length} candidate(s) to accept`
-          : `Accepted ${r.accepted.length} revision(s)`,
-      () =>
-        runImport(ctx.project, ctx.env, {
-          harness,
-          dryRun,
-          onlyCandidateIds: null,
-        }),
-    );
+    const importWork = () =>
+      runImport(ctx.project, ctx.env, {
+        harness,
+        dryRun,
+        onlyCandidateIds: null,
+      });
+    const report = hook
+      ? await importWork()
+      : await withProgress(
+          ctx,
+          dryRun ? "Discovering Sessions" : "Importing Sessions",
+          (r) =>
+            r.dryRun
+              ? `Discovered ${r.wouldAccept.length} candidate(s) to accept`
+              : `Accepted ${r.accepted.length} revision(s)`,
+          importWork,
+        );
     // Pending resolution runs first: a Candidate associated here is
     // re-imported with the secret gate intact, so its flagged bytes join
     // the flagged prompt below instead of being accepted silently.
@@ -69,7 +83,7 @@ export const importCommand: CommandDefinition = {
     if (interactive && report.flagged.length > 0) {
       await resolveFlaggedInteractively(ctx, report);
     }
-    return { json: report, human: humanImportReport(report) };
+    return { json: report, human: hook ? "" : humanImportReport(report) };
   },
 };
 
@@ -99,10 +113,9 @@ async function resolveFlaggedInteractively(
   report: ImportReport,
 ): Promise<void> {
   const { select, isCancel } = await import("@clack/prompts");
-  const state = await readDiscoveryState(ctx.project.paths.discoveryFile);
   const acceptIds: string[] = [];
+  const ignoreIds: string[] = [];
   const resolvedIds = new Set<string>();
-  let stateChanged = false;
   for (const flagged of report.flagged) {
     const candidateId = String(flagged["candidateId"]);
     const hitLines = renderSuspectedHits(
@@ -131,12 +144,16 @@ async function resolveFlaggedInteractively(
       acceptIds.push(candidateId);
       resolvedIds.add(candidateId);
     } else if (choice === "ignore") {
-      ignoreCandidate(state, candidateId);
+      ignoreIds.push(candidateId);
       resolvedIds.add(candidateId);
-      stateChanged = true;
     }
   }
-  if (stateChanged) await writeDiscoveryState(ctx.project.paths.discoveryFile, state);
+  if (ignoreIds.length > 0) {
+    await mutateDiscoveryState(ctx.project, ctx.env, (state) => {
+      for (const candidateId of ignoreIds) ignoreCandidate(state, candidateId);
+      return true;
+    });
+  }
   if (acceptIds.length > 0) {
     const second = await withProgress(
       ctx,
@@ -178,10 +195,9 @@ async function resolvePendingInteractively(
     pending.map((entry) => entry.candidate),
   );
   try {
-    const state = await readDiscoveryState(ctx.project.paths.discoveryFile);
     const associateIds: string[] = [];
+    const ignoreIds: string[] = [];
     const resolvedIds = new Set<string>();
-    let stateChanged = false;
     for (const { candidate } of pending) {
       const hint = preview.hints.get(candidate.candidateId);
       const familyNote = hint === undefined ? "" : `${familyHintText(hint)}\n`;
@@ -197,17 +213,23 @@ async function resolvePendingInteractively(
       });
       if (isCancel(choice)) throw new GliaError("CANCELLED", "import cancelled");
       if (choice === "associate") {
-        associateCandidate(state, candidate.candidateId, ctx.project.declaration.projectId);
         associateIds.push(candidate.candidateId);
         resolvedIds.add(candidate.candidateId);
-        stateChanged = true;
       } else if (choice === "ignore") {
-        ignoreCandidate(state, candidate.candidateId);
+        ignoreIds.push(candidate.candidateId);
         resolvedIds.add(candidate.candidateId);
-        stateChanged = true;
       }
     }
-    if (stateChanged) await writeDiscoveryState(ctx.project.paths.discoveryFile, state);
+    if (associateIds.length > 0 || ignoreIds.length > 0) {
+      const decidedAt = new Date().toISOString();
+      await mutateDiscoveryState(ctx.project, ctx.env, (state) => {
+        for (const candidateId of associateIds) {
+          associateCandidate(state, candidateId, ctx.project.declaration.projectId, decidedAt);
+        }
+        for (const candidateId of ignoreIds) ignoreCandidate(state, candidateId);
+        return true;
+      });
+    }
     if (associateIds.length > 0) {
       const second = await withProgress(
         ctx,
@@ -251,7 +273,16 @@ export function humanImportReport(report: ImportReport): string {
     }
   }
   if (report.flagged.length > 0) {
-    lines.push(`Withheld ${report.flagged.length} candidate(s) with suspected secrets:`);
+    const oldest = report.flagged
+      .map((flagged) => String(flagged["firstFlaggedAt"] ?? ""))
+      .filter(Boolean)
+      .sort()[0];
+    const days = oldest === undefined ? 0 : ageDays(oldest);
+    const age = days === 0 ? "less than a day" : `${days} day(s)`;
+    lines.push(
+      `Withheld ${report.flagged.length} candidate(s) with suspected secrets; oldest withheld for ${age}.` +
+        (days >= 14 ? " Harness retention may delete the source." : ""),
+    );
     for (const flagged of report.flagged) {
       lines.push(
         `  ${flagged["candidateId"]} (${flagged["harnessId"]} ${flagged["sourceSessionId"]}):`,
@@ -298,6 +329,16 @@ export function humanImportReport(report: ImportReport): string {
   }
   if (report.pending.length > 0) {
     lines.push(`Run \`glia candidates\` to inspect pending candidates, then \`glia accept <id>\`.`);
+  }
+  if (report.prunedWithheld.length > 0) {
+    lines.push(
+      `Recorded ${report.prunedWithheld.length} withheld candidate(s) whose Harness source disappeared.`,
+    );
+    for (const loss of report.prunedWithheld) {
+      lines.push(
+        `warning: withheld candidate ${loss.candidateId} source was no longer discoverable.`,
+      );
+    }
   }
   for (const failure of report.adapterFailures) {
     lines.push(`warning: ${failure.harnessId} discovery failed: ${failure.message}`);

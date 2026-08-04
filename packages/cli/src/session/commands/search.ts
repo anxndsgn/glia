@@ -29,6 +29,12 @@ import {
 } from "../projection/query.ts";
 import { parseHarnessOption } from "./import.ts";
 import type { Database } from "bun:sqlite";
+import { discoverCandidates } from "../domain/discover.ts";
+import {
+  advisoriesForDiscovery,
+  renderDiscoveryAdvisories,
+  type SessionAdvisory,
+} from "../domain/advisories.ts";
 
 const DEFAULT_LIMIT = 20;
 const DEFAULT_PER_SESSION = 3;
@@ -120,7 +126,7 @@ export const searchCommand: CommandDefinition = {
       if (params.query !== null) {
         const result = searchText(db, params);
         const contexts = computeContexts(db, result.groups, context);
-        return {
+        const outcome: CommandOutcome = {
           json: {
             mode: "text",
             totalMatches: result.totalMatches,
@@ -131,10 +137,11 @@ export const searchCommand: CommandDefinition = {
           },
           human: renderGroups(result, params, contexts, renderTextMatch, "matches"),
         };
+        return await addZeroResultAdvisories(ctx, result.totalMatches, outcome);
       }
       const result = searchFileTouches(db, params);
       const contexts = computeContexts(db, result.groups, context);
-      return {
+      const outcome: CommandOutcome = {
         json: {
           mode: "file_touches",
           totalMatches: result.totalMatches,
@@ -145,11 +152,27 @@ export const searchCommand: CommandDefinition = {
         },
         human: renderGroups(result, params, contexts, renderFileTouchMatch, "file touches"),
       };
+      return await addZeroResultAdvisories(ctx, result.totalMatches, outcome);
     } finally {
       db.close();
     }
   },
 };
+
+async function addZeroResultAdvisories(
+  ctx: Parameters<CommandDefinition["run"]>[0],
+  totalMatches: number,
+  outcome: CommandOutcome,
+): Promise<CommandOutcome> {
+  if (totalMatches !== 0) return outcome;
+  const discovery = await discoverCandidates(ctx.project, ctx.env, null);
+  const advisories: SessionAdvisory[] = await advisoriesForDiscovery(ctx.project, discovery);
+  if (advisories.length === 0) return outcome;
+  return {
+    json: { ...(outcome.json as Record<string, unknown>), advisories },
+    human: [outcome.human, ...renderDiscoveryAdvisories(advisories)].join("\n"),
+  };
+}
 
 export function parseFilterValue(value: string): EventFilter {
   switch (value) {

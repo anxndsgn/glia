@@ -44,6 +44,9 @@ import {
   serializeLedgerFile,
 } from "./domain/deletion.ts";
 import { countArchivedSessions, mergeArchiveUnit, SESSION_ARCHIVE_DIR } from "./domain/archive.ts";
+import { advisoriesForDiscovery } from "./domain/advisories.ts";
+import { readWithheldLosses } from "./domain/withheld-loss.ts";
+import { readHookLiveness, readHookRunReport } from "../core/hooks/run-state.ts";
 
 const SESSIONS_PREFIX = "session/sessions/";
 
@@ -154,10 +157,18 @@ export const sessionModule: SessionModule<SessionConfig> = {
     let pendingCandidates = 0;
     let ignoredCandidates = 0;
     const discovery = await discoverCandidates(project, context.env, null);
+    const advisories = await advisoriesForDiscovery(project, discovery);
     for (const { classification } of discovery.candidates) {
       if (classification.kind === "pending") pendingCandidates += 1;
       if (classification.kind === "ignored") ignoredCandidates += 1;
     }
+    const importable = advisories.find((entry) => entry.kind === "importable");
+    const withheld = advisories.find((entry) => entry.kind === "withheld");
+    const losses = await readWithheldLosses(project.paths.withheldLossFile);
+    const [machineHook, projectHook] = await Promise.all([
+      readHookLiveness(project.home),
+      readHookRunReport(project),
+    ]);
     return {
       detail: {
         secretDetection: config.secretDetectionEnabled ? "enabled" : "disabled",
@@ -166,6 +177,21 @@ export const sessionModule: SessionModule<SessionConfig> = {
         conflicts: conflictedIds.length,
         tombstoneEvents: tombstoneEvents.length,
         pendingCandidates,
+        importableCandidates: importable?.count ?? 0,
+        withheldCandidates:
+          withheld?.kind === "withheld"
+            ? {
+                count: withheld.count,
+                oldestFirstFlaggedAt: withheld.oldestFirstFlaggedAt,
+                retentionWarning: withheld.retentionWarning,
+              }
+            : { count: 0, oldestFirstFlaggedAt: null, retentionWarning: false },
+        lostWithheldCandidates: { count: losses.length, records: losses },
+        hookLiveness: {
+          machineLastRunAt: machineHook?.lastRunAt ?? null,
+          projectLastRunAt: projectHook?.finishedAt ?? null,
+          projectLastOutcome: projectHook?.outcome ?? null,
+        },
         ignoredCandidates,
         projection:
           pointer === null

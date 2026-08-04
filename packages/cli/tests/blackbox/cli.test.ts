@@ -9,11 +9,13 @@ import {
   test,
 } from "bun:test";
 import { join } from "node:path";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import { sha256File } from "../../src/session/adapters/capture.ts";
 import { DELETION_LIMITATION } from "../../src/core/store/deletion.ts";
 import { sessionIdOf } from "../../src/session/domain/identity.ts";
+import { hookLivenessFile } from "../../src/core/project/paths.ts";
 import {
+  FAKE_KEY,
   makeBareRemote,
   makeSecondReplica,
   makeTestEnv,
@@ -84,6 +86,51 @@ afterAll(async () => {
 });
 
 describe("compiled CLI contract", () => {
+  test("--json with hook mode is an explicit usage error", async () => {
+    env.env["GLIA_HOOK_FOREGROUND"] = "1";
+    const run = await glia(["--json", "import", "--hook"]);
+    expect(run.exitCode).not.toBe(0);
+    const doc = JSON.parse(run.stdout) as { ok: boolean; error: { code: string } };
+    expect(doc.ok).toBeFalse();
+    expect(doc.error.code).toBe("USAGE");
+    expect(run.stderr).toBe("");
+  });
+
+  test("foreground hook mode is silent and does not opt in an unbound worktree", async () => {
+    env.env["GLIA_HOOK_FOREGROUND"] = "1";
+    const run = await glia(["import", "--hook"]);
+    expect(run).toMatchObject({ exitCode: 0, stdout: "", stderr: "" });
+    expect(await Bun.file(hookLivenessFile(env.home)).exists()).toBeTrue();
+    expect(await readdir(env.home)).not.toContain("projects");
+  });
+
+  test("detached hook returns promptly, stays silent, and imports in the background", async () => {
+    // Any ordinary command is the explicit opt-in that realizes the Binding.
+    expect((await glia(["status"])).exitCode).toBe(0);
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "hook-blackbox",
+      cwd: env.worktree,
+      userText: "BACKGROUNDHOOKPROBE searchable after detach",
+    });
+
+    const started = performance.now();
+    const hook = await glia(["import", "--hook"]);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(hook).toMatchObject({ exitCode: 0, stdout: "", stderr: "" });
+
+    let matches = 0;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const search = await glia(["--json", "search", "BACKGROUNDHOOKPROBE"]);
+      if (search.exitCode === 0) {
+        matches = (JSON.parse(search.stdout) as { result: { totalMatches: number } }).result
+          .totalMatches;
+        if (matches > 0) break;
+      }
+      await Bun.sleep(25);
+    }
+    expect(matches).toBeGreaterThan(0);
+  });
+
   test("default output is concise human text with no serialized JSON", async () => {
     await writeClaudeSession(env.claudeHome, { sessionId: "aaaa-1", cwd: env.worktree });
     const run = await glia(["import"]);
@@ -367,6 +414,37 @@ describe("compiled CLI contract", () => {
     expect(applied.exitCode).toBe(0);
     const show = await glia(["store", "remote", "show"]);
     expect(show.stdout).toContain("/tmp/store.git");
+  });
+
+  test("Project-level Store commands carry persisted withheld advisories", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "top-level-advisory",
+      cwd: env.worktree,
+      extraLines: [
+        {
+          type: "user",
+          sessionId: "top-level-advisory",
+          cwd: env.worktree,
+          message: { role: "user", content: `credential ${FAKE_KEY}` },
+        },
+      ],
+    });
+    expect((await glia(["--json", "import"])).exitCode).toBe(0);
+
+    for (const args of [
+      ["--json", "store", "remote", "show"],
+      ["--json", "store", "remote", "set", "/tmp/store.git", "--dry-run"],
+      ["--json", "hook", "install"],
+    ]) {
+      const run = await glia(args);
+      expect(run.exitCode).toBe(0);
+      const doc = JSON.parse(run.stdout) as {
+        result: { advisories: { kind: string; count: number }[] };
+      };
+      expect(doc.result.advisories).toContainEqual(
+        expect.objectContaining({ kind: "withheld", count: 1 }),
+      );
+    }
   });
 
   test("session delete confirms before mutating, states the limitation verbatim, and leaves a queryable tombstone", async () => {

@@ -3,12 +3,13 @@ import type { CommandOutcome } from "../../core/output/result.ts";
 import { confirmProceed } from "../../core/output/confirm.ts";
 import { pickGrouped, type PickerItem } from "../../core/output/picker.ts";
 import { GliaError } from "../../core/output/errors.ts";
+import { BindingIndex } from "../../core/project/bindings.ts";
 import { discoverCandidates } from "../domain/discover.ts";
 import type { ClassifiedCandidate } from "../domain/classify.ts";
 import {
   associateCandidate,
+  mutateDiscoveryState,
   readDiscoveryState,
-  writeDiscoveryState,
   type DiscoveryState,
 } from "../domain/discovery-state.ts";
 import { runImport } from "../domain/import.ts";
@@ -119,15 +120,30 @@ export const acceptCommand: CommandDefinition = {
       );
       if (associating.length > 0) {
         const decidedAt = new Date().toISOString();
-        for (const entry of associating) {
-          associateCandidate(
-            state,
-            entry.candidate.candidateId,
-            ctx.project.declaration.projectId,
-            decidedAt,
-          );
-        }
-        await writeDiscoveryState(ctx.project.paths.discoveryFile, state);
+        await mutateDiscoveryState(ctx.project, ctx.env, async (latest) => {
+          const bindings = new BindingIndex(ctx.project.home);
+          for (const entry of associating) {
+            const openingPath = entry.candidate.openingPath;
+            const mapped = openingPath === null ? null : await bindings.mapOpeningPath(openingPath);
+            if (mapped !== null && mapped.projectId !== ctx.project.declaration.projectId) {
+              throw new GliaError(
+                "ASSOCIATION_CONFLICT",
+                `candidate ${entry.candidate.candidateId} is now owned by project ${mapped.projectId}`,
+                {
+                  candidateId: entry.candidate.candidateId,
+                  mappedProjectId: mapped.projectId,
+                },
+              );
+            }
+            associateCandidate(
+              latest,
+              entry.candidate.candidateId,
+              ctx.project.declaration.projectId,
+              decidedAt,
+            );
+          }
+          return true;
+        });
       }
 
       const tombstonedIds = targets
@@ -141,22 +157,6 @@ export const acceptCommand: CommandDefinition = {
         overrideFlagged: true,
         precaptured: preview.precaptured,
       });
-      // Deletion collapsed any explicit association for these identities;
-      // re-admission restores it, so subsequent source growth flows as
-      // ordinary Revisions. Written only after acceptance succeeded — the
-      // classification must stay `tombstoned` while the import sessions the
-      // override.
-      const readmitted = tombstonedIds.filter((id) =>
-        report.accepted.some((a) => a.sessionId === id),
-      );
-      if (readmitted.length > 0) {
-        const after = await readDiscoveryState(ctx.project.paths.discoveryFile);
-        const decidedAt = new Date().toISOString();
-        for (const id of readmitted) {
-          associateCandidate(after, id, ctx.project.declaration.projectId, decidedAt);
-        }
-        await writeDiscoveryState(ctx.project.paths.discoveryFile, after);
-      }
       const human = [...skippedLines, humanImportReport(report)].join("\n");
       return { json: { ...report, skipped: skippedLines }, human };
     } finally {

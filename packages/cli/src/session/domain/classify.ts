@@ -1,4 +1,4 @@
-import { BindingIndex, bindingsContain } from "../../core/project/bindings.ts";
+import { BindingIndex } from "../../core/project/bindings.ts";
 import type { LoadedProject } from "../../core/session-module.ts";
 import type { SessionCandidate } from "../adapters/types.ts";
 import type { DiscoveryState } from "./discovery-state.ts";
@@ -18,7 +18,8 @@ export interface ClassifiedCandidate {
 
 /**
  * Association rules:
- * - an explicit machine-local decision wins;
+ * - a live exact-worktree Binding wins over a stale explicit decision;
+ * - otherwise an explicit machine-local decision wins;
  * - a tombstoned Source Identity — a Deletion Ledger entry and no live
  *   Session — is never accepted automatically again, and `tombstoned`
  *   takes precedence over `flagged` when both apply;
@@ -37,13 +38,6 @@ export async function classifyCandidate(
 ): Promise<CandidateClass> {
   if (state.ignored.includes(candidate.candidateId)) return { kind: "ignored" };
 
-  const explicit = state.associations[candidate.candidateId];
-  if (explicit) {
-    return explicit.projectId === project.declaration.projectId
-      ? { kind: "associated", via: "explicit" }
-      : { kind: "out_of_scope", mappedProjectId: explicit.projectId };
-  }
-
   if (await isTombstoned(project.paths.storeDir, candidate.candidateId)) {
     const events = await ledgerEventsFor(project.paths.storeDir, candidate.candidateId);
     const last = events[events.length - 1]!;
@@ -55,13 +49,26 @@ export async function classifyCandidate(
     };
   }
 
-  if (candidate.openingPath === null) return { kind: "pending" };
-
-  const own = await bindings.read(project.paths.bindingsFile);
-  if (own && bindingsContain(own, candidate.openingPath)) {
-    return { kind: "associated", via: "binding" };
+  const explicit = state.associations[candidate.candidateId];
+  if (candidate.openingPath !== null) {
+    const resolution = await bindings.resolveOpeningPath(candidate.openingPath);
+    if (resolution.mapping !== null) {
+      if (resolution.mapping.projectId !== project.declaration.projectId) {
+        return { kind: "out_of_scope", mappedProjectId: resolution.mapping.projectId };
+      }
+      return {
+        kind: "associated",
+        via: explicit?.projectId === project.declaration.projectId ? "explicit" : "binding",
+      };
+    }
+    if (!resolution.resolved && explicit === undefined) return { kind: "pending" };
   }
 
-  const mapped = await bindings.mapPath(candidate.openingPath);
-  return { kind: "out_of_scope", mappedProjectId: mapped?.projectId ?? null };
+  if (explicit) {
+    return explicit.projectId === project.declaration.projectId
+      ? { kind: "associated", via: "explicit" }
+      : { kind: "out_of_scope", mappedProjectId: explicit.projectId };
+  }
+  if (candidate.openingPath === null) return { kind: "pending" };
+  return { kind: "out_of_scope", mappedProjectId: null };
 }

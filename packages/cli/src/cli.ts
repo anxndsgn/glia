@@ -7,7 +7,7 @@ import { runStatus } from "./core/commands/status.ts";
 import { runStoreRemoteSet, runStoreRemoteShow } from "./core/commands/store-remote.ts";
 import { runSyncCommand } from "./core/commands/sync.ts";
 import type { CommandRunContext } from "./core/session-module.ts";
-import { toGliaError } from "./core/output/errors.ts";
+import { GliaError, toGliaError } from "./core/output/errors.ts";
 import {
   renderError,
   renderSuccess,
@@ -15,9 +15,14 @@ import {
   type RenderTarget,
 } from "./core/output/result.ts";
 import { colorEnabled } from "./core/output/terminal.ts";
-import { loadProject } from "./core/project/load.ts";
+import { loadExistingProject, loadProject } from "./core/project/load.ts";
 import { gliaHome } from "./core/project/paths.ts";
 import { sessionModule } from "./session/module.ts";
+import { runWithSessionAdvisory } from "./session/commands/advisory-output.ts";
+import { runHookInvocation } from "./session/commands/hook-import.ts";
+import { currentSelfCommand, hookExecutablePath } from "./session/commands/hook-import.ts";
+import { runHookInstall, runHookRemove } from "./core/commands/hook.ts";
+import { runSetup, runSetupRemove } from "./core/commands/setup.ts";
 
 const target: RenderTarget = {
   stdout: (text) => process.stdout.write(text),
@@ -73,6 +78,29 @@ async function loadRunContext(
   };
 }
 
+async function runWithOptionalSessionAdvisory(
+  flags: GlobalFlags,
+  run: () => Promise<CommandOutcome> | CommandOutcome,
+): Promise<CommandOutcome> {
+  let ctx: CommandRunContext | null = null;
+  try {
+    const project = await loadExistingProject(process.cwd(), gliaHome());
+    if (project !== null) {
+      ctx = {
+        project,
+        env: Bun.env,
+        jsonMode: flags.jsonMode,
+        inputDisabled: flags.inputDisabled,
+        colors: !flags.jsonMode && colorEnabled(Bun.env, process.stdout.isTTY === true),
+      };
+    }
+  } catch {
+    // Machine-level setup commands stay available outside a Project and
+    // when optional Project advisory state is unreadable.
+  }
+  return ctx === null ? await run() : await runWithSessionAdvisory(ctx, run, target.stdout);
+}
+
 // Session is built in and always enabled. Its verbs live directly at the
 // root command surface rather than behind a namespace.
 for (const definition of sessionModule.commands) {
@@ -104,9 +132,28 @@ for (const definition of sessionModule.commands) {
           : [value === undefined || value === null ? undefined : String(value)],
       );
     const options = invocation[invocation.length - 2] as Record<string, unknown>;
-    await execute(definition.name, async (flags) =>
-      definition.run(await loadRunContext(flags), args, options),
-    );
+    if (definition.name === "import" && options["hook"] === true) {
+      await execute(definition.name, async (flags) => {
+        if (options["harness"] !== undefined || options["dryRun"] === true) {
+          throw new GliaError("USAGE", "--hook cannot be combined with --harness or --dry-run");
+        }
+        await runHookInvocation({
+          cwd: process.cwd(),
+          env: Bun.env,
+          jsonMode: flags.jsonMode,
+        });
+        return { json: {}, human: "" };
+      });
+      return;
+    }
+    await execute(definition.name, async (flags) => {
+      const ctx = await loadRunContext(flags);
+      return await runWithSessionAdvisory(
+        ctx,
+        () => definition.run(ctx, args, options),
+        target.stdout,
+      );
+    });
   });
 }
 
@@ -114,9 +161,14 @@ program
   .command("sync")
   .description("synchronize the whole Store with its declared remote (explicit, idempotent)")
   .action(async () => {
-    await execute("sync", async (flags) =>
-      runSyncCommand(await loadRunContext(flags, { allowMissingStore: true }), [sessionModule]),
-    );
+    await execute("sync", async (flags) => {
+      const ctx = await loadRunContext(flags, { allowMissingStore: true });
+      return await runWithSessionAdvisory(
+        ctx,
+        () => runSyncCommand(ctx, [sessionModule]),
+        target.stdout,
+      );
+    });
   });
 
 const storeRemote = program
@@ -131,20 +183,27 @@ storeRemote
   .option("--dry-run", "print the declaration change without writing")
   .option("--yes", "accept the declaration change without prompting")
   .action(async (url: string, opts: { dryRun?: boolean; yes?: boolean }) => {
-    await execute("store.remote.set", async (flags) =>
-      runStoreRemoteSet(await loadRunContext(flags, { allowMissingStore: true }), url, {
-        dryRun: opts.dryRun === true,
-        yes: opts.yes === true,
-      }),
-    );
+    await execute("store.remote.set", async (flags) => {
+      const ctx = await loadRunContext(flags, { allowMissingStore: true });
+      return await runWithSessionAdvisory(
+        ctx,
+        () =>
+          runStoreRemoteSet(ctx, url, {
+            dryRun: opts.dryRun === true,
+            yes: opts.yes === true,
+          }),
+        target.stdout,
+      );
+    });
   });
 storeRemote
   .command("show")
   .description("show the declared Store remote")
   .action(async () => {
-    await execute("store.remote.show", async (flags) =>
-      runStoreRemoteShow(await loadRunContext(flags, { allowMissingStore: true })),
-    );
+    await execute("store.remote.show", async (flags) => {
+      const ctx = await loadRunContext(flags, { allowMissingStore: true });
+      return await runWithSessionAdvisory(ctx, () => runStoreRemoteShow(ctx), target.stdout);
+    });
   });
 
 interface SkillCliOptions {
@@ -186,9 +245,11 @@ addSkillTargetOptions(
   .option("--force", "overwrite a differing SKILL.md without prompting")
   .action(async (opts: SkillCliOptions) => {
     await execute("skill.install", (flags) =>
-      runSkillInstall(
-        { cwd: process.cwd(), homeDir: homedir(), inputDisabled: flags.inputDisabled },
-        { ...skillTargetFlags(opts), force: opts.force === true },
+      runWithOptionalSessionAdvisory(flags, () =>
+        runSkillInstall(
+          { cwd: process.cwd(), homeDir: homedir(), inputDisabled: flags.inputDisabled },
+          { ...skillTargetFlags(opts), force: opts.force === true },
+        ),
       ),
     );
   });
@@ -196,12 +257,79 @@ addSkillTargetOptions(
   skill.command("remove").description("remove installed glia SKILL.md copies"),
 ).action(async (opts: SkillCliOptions) => {
   await execute("skill.remove", (flags) =>
-    runSkillRemove(
-      { cwd: process.cwd(), homeDir: homedir(), inputDisabled: flags.inputDisabled },
-      skillTargetFlags(opts),
+    runWithOptionalSessionAdvisory(flags, () =>
+      runSkillRemove(
+        { cwd: process.cwd(), homeDir: homedir(), inputDisabled: flags.inputDisabled },
+        skillTargetFlags(opts),
+      ),
     ),
   );
 });
+
+const hook = program.command("hook").description("manage SessionEnd import automation hooks");
+hook
+  .command("install")
+  .description("install glia import --hook for every present Harness")
+  .action(async () => {
+    await execute("hook.install", (flags) =>
+      runWithOptionalSessionAdvisory(flags, () =>
+        runHookInstall({
+          env: Bun.env,
+          executablePath: hookExecutablePath(),
+          selfCommand: currentSelfCommand(),
+        }),
+      ),
+    );
+  });
+hook
+  .command("remove")
+  .description("remove only positively identified glia SessionEnd hooks")
+  .action(async () => {
+    await execute("hook.remove", (flags) =>
+      runWithOptionalSessionAdvisory(flags, () =>
+        runHookRemove({
+          env: Bun.env,
+          executablePath: hookExecutablePath(),
+          selfCommand: currentSelfCommand(),
+        }),
+      ),
+    );
+  });
+
+const setup = program
+  .command("setup")
+  .description("install the bundled skill and SessionEnd automation for this machine")
+  .action(async () => {
+    await execute("setup", (flags) =>
+      runWithOptionalSessionAdvisory(flags, () =>
+        runSetup({
+          cwd: process.cwd(),
+          homeDir: homedir(),
+          env: Bun.env,
+          executablePath: hookExecutablePath(),
+          selfCommand: currentSelfCommand(),
+          inputDisabled: flags.inputDisabled,
+        }),
+      ),
+    );
+  });
+setup
+  .command("remove")
+  .description("remove only positively identified glia hooks and skill copies")
+  .action(async () => {
+    await execute("setup.remove", (flags) =>
+      runWithOptionalSessionAdvisory(flags, () =>
+        runSetupRemove({
+          cwd: process.cwd(),
+          homeDir: homedir(),
+          env: Bun.env,
+          executablePath: hookExecutablePath(),
+          selfCommand: currentSelfCommand(),
+          inputDisabled: flags.inputDisabled,
+        }),
+      ),
+    );
+  });
 
 program
   .command("status")
@@ -209,7 +337,11 @@ program
   .action(async () => {
     await execute("status", async (flags) => {
       const ctx = await loadRunContext(flags, { allowMissingStore: true });
-      return runStatus(ctx.project, [sessionModule], ctx.env);
+      return await runWithSessionAdvisory(
+        ctx,
+        () => runStatus(ctx.project, [sessionModule], ctx.env),
+        target.stdout,
+      );
     });
   });
 
