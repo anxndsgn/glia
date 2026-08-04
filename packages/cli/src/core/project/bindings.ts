@@ -125,7 +125,6 @@ export class BindingIndex {
   readonly #home: string;
   readonly #overlay: { worktree: string; projectId: string } | null;
   readonly #byFile = new Map<string, Bindings | null>();
-  readonly #resolutions = new Map<string, OpeningPathResolution>();
   #projectIds: string[] | null = null;
 
   constructor(home: string, overlay: BindingOverlay | null = null) {
@@ -189,16 +188,10 @@ export class BindingIndex {
    * root has not opted in and must not be inherited by its parent Project.
    */
   async resolveOpeningPath(openingPath: string): Promise<OpeningPathResolution> {
-    // Many candidates share an Opening Path; the worktree climb below spawns
-    // git, so one resolution per path per index.
-    const cached = this.#resolutions.get(openingPath);
-    if (cached !== undefined) return cached;
-    const resolution = await this.#resolveOpeningPath(openingPath);
-    this.#resolutions.set(openingPath, resolution);
-    return resolution;
-  }
-
-  async #resolveOpeningPath(openingPath: string): Promise<OpeningPathResolution> {
+    // Deliberately unmemoized: the Bindings this index caches are one
+    // machine-local snapshot, but worktree topology is resolved live per
+    // decision so a path deleted or replaced mid-batch cannot serve a
+    // stale owner to later candidates.
     let probe = openingPath;
     let missing = false;
     for (;;) {
