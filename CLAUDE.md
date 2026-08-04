@@ -51,3 +51,6 @@ Write flow: adapter captures source bytes → domain accepts a Revision into the
 - Errors are `GliaError` with a stable code and `nextSteps`; convert unknowns with `toGliaError`.
 - Tests live in `packages/cli/tests/{unit,integration,blackbox}`; integration tests exercise real Stores in temp dirs via `tests/helpers.ts`.
 - `scripts/build.ts` injects build provenance as compile-time defines; a dirty working tree gets a `-dirty` commit suffix — don't circumvent that.
+- Use conventional commits like `feat(scope):`, `fix(scope):`.
+- Don't add backward-compatibility shims, migration paths, or deprecated aliases unless explicitly requested — prefer clean breaks.
+- Spec files are gitignored and discarded once implemented — treat the codebase, not specs, as the source of truth.
