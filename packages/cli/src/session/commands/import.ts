@@ -90,37 +90,24 @@ export const importCommand: CommandDefinition = {
     },
   ],
   async run(ctx, _args, options): Promise<CommandOutcome> {
-    const hook = options["hook"] === true;
-    if (hook && ctx.jsonMode) {
-      throw new GliaError("USAGE", "--hook cannot be combined with --json");
-    }
-    if (hook && (options["harness"] !== undefined || options["dryRun"] === true)) {
-      throw new GliaError("USAGE", "--hook cannot be combined with --harness or --dry-run");
-    }
+    // `import --hook` never reaches this run: the CLI dispatcher intercepts
+    // the flag and routes through the machine-local hook invocation instead.
     const harness = parseHarnessOption(options["harness"]);
     const dryRun = options["dryRun"] === true;
     // Interactive resolution follows the terminal: --json, --no-input, and
     // piped stdio all disable it, so scripted imports never block on a prompt.
-    const interactive = !hook && !ctx.inputDisabled && !dryRun;
+    const interactive = !ctx.inputDisabled && !dryRun;
     // Discovery walks every harness history and capture reads whole
     // bundles: on a large history this is seconds of silence otherwise.
-    const importWork = () =>
-      runImport(ctx.project, ctx.env, {
-        harness,
-        dryRun,
-        onlyCandidateIds: null,
-      });
-    const report = hook
-      ? await importWork()
-      : await withProgress(
-          ctx,
-          dryRun ? "Discovering Sessions" : "Importing Sessions",
-          (r) =>
-            r.dryRun
-              ? `Discovered ${r.wouldAccept.length} candidate(s) to accept`
-              : `Accepted ${r.accepted.length} revision(s)`,
-          importWork,
-        );
+    const report = await withProgress(
+      ctx,
+      dryRun ? "Discovering Sessions" : "Importing Sessions",
+      (r) =>
+        r.dryRun
+          ? `Discovered ${r.wouldAccept.length} candidate(s) to accept`
+          : `Accepted ${r.accepted.length} revision(s)`,
+      () => runImport(ctx.project, ctx.env, { harness, dryRun, onlyCandidateIds: null }),
+    );
     // Pending resolution runs first: a Candidate associated here is
     // re-imported with the secret gate intact, so its flagged bytes join
     // the flagged prompt below instead of being accepted silently.
@@ -130,7 +117,7 @@ export const importCommand: CommandDefinition = {
     if (interactive && report.flagged.length > 0) {
       await resolveFlaggedInteractively(ctx, report);
     }
-    return { json: report, human: hook ? "" : humanImportReport(report) };
+    return { json: report, human: humanImportReport(report) };
   },
 };
 

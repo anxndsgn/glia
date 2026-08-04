@@ -1,7 +1,6 @@
-import { dirname } from "node:path";
-import { mkdir } from "node:fs/promises";
 import { identityFile } from "./paths.ts";
 import { GliaError } from "../output/errors.ts";
+import { writeJsonAtomic } from "../state/atomic-file.ts";
 import { requireSupportedSchemaVersion } from "../state/schema-version.ts";
 
 export const IDENTITY_SCHEMA_VERSION = 1;
@@ -37,8 +36,6 @@ export async function createReplicaIdentity(home: string): Promise<ReplicaIdenti
     schemaVersion: IDENTITY_SCHEMA_VERSION,
     replicaId: `rpl_${crypto.randomUUID()}`,
   };
-  const file = identityFile(home);
-  await mkdir(dirname(file), { recursive: true });
-  await Bun.write(file, JSON.stringify(identity, null, 2) + "\n");
+  await writeJsonAtomic(identityFile(home), identity);
   return identity;
 }

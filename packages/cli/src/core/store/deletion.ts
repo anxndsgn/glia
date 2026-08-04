@@ -2,8 +2,10 @@ import { dirname, join } from "node:path";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import type { SessionModule, StoreDeletionEvent } from "../session-module.ts";
 import { GliaError } from "../output/errors.ts";
+import { writeJsonAtomic } from "../state/atomic-file.ts";
 import { requireSupportedSchemaVersion } from "../state/schema-version.ts";
 import { git, gitOrThrow } from "./git.ts";
+import { COMMIT_IDENTITY_ENV } from "./store.ts";
 import { deletionMarkerBytes, STORE_MARKER_FILE } from "./marker.ts";
 
 /**
@@ -238,15 +240,9 @@ export async function buildLedgerCommit(
       );
     }
     const tree = (await gitOrThrow(["write-tree"], storeDir, { env })).trim();
-    const identity = {
-      GIT_AUTHOR_NAME: "glia",
-      GIT_AUTHOR_EMAIL: "glia@local",
-      GIT_COMMITTER_NAME: "glia",
-      GIT_COMMITTER_EMAIL: "glia@local",
-    };
     return (
       await gitOrThrow(["commit-tree", tree, "-p", parent], storeDir, {
-        env: { ...env, ...identity },
+        env: { ...env, ...COMMIT_IDENTITY_ENV },
         stdin: message,
       })
     ).trim();
@@ -302,8 +298,7 @@ export async function writeDeletionPending(
     await rm(file, { force: true });
     return;
   }
-  await mkdir(dirname(file), { recursive: true });
-  await Bun.write(file, JSON.stringify(state, null, 2) + "\n");
+  await writeJsonAtomic(file, state);
 }
 
 /** Counts preserved bystander items awaiting explicit disposition. */

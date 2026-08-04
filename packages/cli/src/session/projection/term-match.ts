@@ -23,7 +23,7 @@ const WORD_CHAR = /[0-9A-Za-z_]/;
  * (e.g. İ → i̇) is kept as-is and matches only itself; ranges must stay
  * valid coordinates into the original text.
  */
-function foldCase(value: string): string {
+export function foldCase(value: string): string {
   const folded = value.toLowerCase();
   if (folded.length === value.length) return folded;
   let out = "";
@@ -34,11 +34,20 @@ function foldCase(value: string): string {
   return out;
 }
 
-/** Case-insensitive literal occurrences of one term, optionally word-bounded. */
-export function termOccurrences(text: string, term: string, word: boolean): TermRange[] {
+/**
+ * Case-insensitive literal occurrences of one term, optionally
+ * word-bounded. Callers matching several terms against one text pass the
+ * text's folded copy so it is computed once, not per term.
+ */
+export function termOccurrences(
+  text: string,
+  term: string,
+  word: boolean,
+  foldedText = foldCase(text),
+): TermRange[] {
   const ranges: TermRange[] = [];
   if (term.length === 0) return ranges;
-  const haystack = foldCase(text);
+  const haystack = foldedText;
   const needle = foldCase(term);
   // Edge classes and neighbor tests use the original characters, never the
   // folded copy: a non-ASCII edge (İ) whose lowercase form starts with an
@@ -59,5 +68,6 @@ export function termOccurrences(text: string, term: string, word: boolean): Term
 
 /** Whether every term occurs in the text under the given matching mode. */
 export function matchesEveryTerm(text: string, terms: string[], word: boolean): boolean {
-  return terms.every((term) => termOccurrences(text, term, word).length > 0);
+  const folded = foldCase(text);
+  return terms.every((term) => termOccurrences(text, term, word, folded).length > 0);
 }

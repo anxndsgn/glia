@@ -62,7 +62,7 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
   harnessId: "claude-code",
 
   async inspectAvailability(context: DiscoveryContext): Promise<HarnessAvailability> {
-    const root = claudeConfigDir(context.env);
+    const root = claudeHome(context.env);
     const projectsDir = join(root, "projects");
     const available = await directoryExists(projectsDir);
     return {
@@ -73,7 +73,7 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
   },
 
   async *discover(context: DiscoveryContext): AsyncIterable<SessionCandidate> {
-    const projectsDir = join(claudeConfigDir(context.env), "projects");
+    const projectsDir = join(claudeHome(context.env), "projects");
     if (!(await directoryExists(projectsDir))) return;
     for (const entry of await sortedSubdirectories(projectsDir)) {
       const dir = join(projectsDir, entry);
@@ -322,8 +322,6 @@ function titleOf(
       return null;
   }
 }
-
-const claudeConfigDir = claudeHome;
 
 async function sortedSubdirectories(path: string): Promise<string[]> {
   const entries = await readdir(path, { withFileTypes: true });

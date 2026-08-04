@@ -34,12 +34,12 @@ export async function classifyCandidate(
   project: LoadedProject,
   state: DiscoveryState,
   candidate: SessionCandidate,
-  bindings: BindingIndex = new BindingIndex(project.home),
+  bindings: BindingIndex,
 ): Promise<CandidateClass> {
   if (state.ignored.includes(candidate.candidateId)) return { kind: "ignored" };
 
-  if (await isTombstoned(project.paths.storeDir, candidate.candidateId)) {
-    const events = await ledgerEventsFor(project.paths.storeDir, candidate.candidateId);
+  const events = await ledgerEventsFor(project.paths.storeDir, candidate.candidateId);
+  if (await isTombstoned(project.paths.storeDir, candidate.candidateId, events)) {
     const last = events[events.length - 1]!;
     return {
       kind: "tombstoned",

@@ -1,7 +1,7 @@
 import type { CommandDefinition } from "../../core/session-module.ts";
 import type { CommandOutcome } from "../../core/output/result.ts";
 import { GliaError } from "../../core/output/errors.ts";
-import { byRecency, positiveIntOrNull } from "./shared.ts";
+import { byRecency, positiveIntOrNull, repeatedValues } from "./shared.ts";
 import { discoverCandidates, candidateSummary } from "../domain/discover.ts";
 import { readDiscoveryState } from "../domain/discovery-state.ts";
 import type { ClassifiedCandidate } from "../domain/classify.ts";
@@ -227,8 +227,7 @@ export const candidatesCommand: CommandDefinition = {
 };
 
 function parseStatusFilters(raw: unknown): StatusFilter[] {
-  if (raw === undefined) return [];
-  const values = Array.isArray(raw) ? raw.map(String) : [String(raw)];
+  const values = repeatedValues(raw);
   for (const value of values) {
     if (!(STATUS_VOCABULARY as readonly string[]).includes(value)) {
       throw new GliaError(

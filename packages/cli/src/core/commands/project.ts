@@ -347,16 +347,6 @@ export async function runProjectBind(
   const retryCommand = `glia project bind ${shellQuote(projectId)} ${shellQuote(targetPath)}${alias ? " --alias" : ""}`;
   const lease = await acquireBindingsLease(ctx, retryCommand);
   try {
-    if (!(await projectIds(ctx.home)).includes(projectId)) {
-      throw new GliaError(
-        "PROJECT_NOT_FOUND",
-        `project ${projectId} does not exist on this machine`,
-        {
-          projectId,
-          nextSteps: ["glia project list"],
-        },
-      );
-    }
     const paths = projectPaths(ctx.home, projectId);
     const bindings = await readBindings(paths.bindingsFile);
     if (bindings === null) {

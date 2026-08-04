@@ -111,5 +111,3 @@ export function renderDiscoveryAdvisories(
   }
   return lines;
 }
-
-export const retentionWarningDays = RETENTION_WARNING_DAYS;

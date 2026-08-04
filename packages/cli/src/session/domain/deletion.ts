@@ -6,8 +6,15 @@ import { GliaError } from "../../core/output/errors.ts";
 import { compareDeletionEvents } from "../../core/store/deletion.ts";
 import { git, gitBytes, gitOrThrow } from "../../core/store/git.ts";
 import { requireSupportedSchemaVersion } from "../../core/state/schema-version.ts";
+import { ProjectStore } from "../../core/store/store.ts";
 import { readDiscoveryState, writeDiscoveryState } from "./discovery-state.ts";
-import type { SessionMeta } from "../storage/store-layout.ts";
+import { isSessionConflicted, readSessionConflict, type SessionConflictDoc } from "./conflict.ts";
+import {
+  readSessionMeta,
+  sessionDir,
+  sessionUnitPath,
+  type SessionMeta,
+} from "../storage/store-layout.ts";
 
 export const LEDGER_SCHEMA_VERSION = 1;
 
@@ -111,7 +118,7 @@ export function mergeLedgerEvents(
 
 /** Purge both the evidence unit and any archive marker for this identity. */
 export function purgePathsFor(event: StoreDeletionEvent): string[] {
-  return [`session/sessions/${event.unitId}`, `session/archive/${event.unitId}.json`];
+  return [sessionUnitPath(event.unitId), `session/archive/${event.unitId}.json`];
 }
 
 /**
@@ -126,7 +133,7 @@ export async function preserveSessionUnit(
   destDir: string,
 ): Promise<void> {
   const storeDir = project.paths.storeDir;
-  const unit = `session/sessions/${event.unitId}`;
+  const unit = sessionUnitPath(event.unitId);
   const listing = await gitOrThrow(
     ["ls-tree", "-r", "--name-only", "-z", commit, "--", unit],
     storeDir,
@@ -222,16 +229,15 @@ export async function ledgerEventsFor(
  * The one-sentence blocking rule: automatic acceptance is blocked exactly
  * when the identity has a Deletion Ledger entry and no live Session.
  */
-export async function isTombstoned(storeDir: string, sessionId: string): Promise<boolean> {
-  const events = await ledgerEventsFor(storeDir, sessionId);
+export async function isTombstoned(
+  storeDir: string,
+  sessionId: string,
+  events?: StoreDeletionEvent[],
+): Promise<boolean> {
+  events ??= await ledgerEventsFor(storeDir, sessionId);
   if (events.length === 0) return false;
-  const live = await Bun.file(
-    join(storeDir, "session", "sessions", sessionId, "session.json"),
-  ).exists();
-  const conflicted = await Bun.file(
-    join(storeDir, "session", "sessions", sessionId, "conflict", "conflict.json"),
-  ).exists();
-  return !live && !conflicted;
+  const live = await Bun.file(join(sessionDir(storeDir, sessionId), "session.json")).exists();
+  return !live && !(await isSessionConflicted(storeDir, sessionId));
 }
 
 export interface TombstoneSummary {
@@ -260,6 +266,39 @@ export function tombstoneSummaries(events: StoreDeletionEvent[]): TombstoneSumma
  * an unknown one answers NOT_FOUND. Every reading surface throws this so
  * the two codes can never drift apart.
  */
+/**
+ * Resolves the Session's Source Identity for a mutation preview: the
+ * Store must be realized, and a Session missing outright answers with
+ * `missingSessionError`. A conflict-frozen Session has no Current
+ * Revision, so its identity falls back to the first conflict candidate.
+ */
+export async function resolveSessionIdentity(
+  storeDir: string,
+  sessionId: string,
+): Promise<{
+  meta: SessionMeta | null;
+  conflict: SessionConflictDoc | null;
+  harnessId: string;
+  sourceSessionId: string;
+}> {
+  if (!(await new ProjectStore(storeDir).exists())) {
+    throw new GliaError(
+      "STORE_NOT_REALIZED",
+      "this Project has no local Store; run `glia sync` first",
+    );
+  }
+  const meta = await readSessionMeta(storeDir, sessionId);
+  const conflict = await readSessionConflict(storeDir, sessionId);
+  if (!meta && !conflict) throw await missingSessionError(storeDir, sessionId);
+  const identity = meta
+    ? { harnessId: meta.harnessId as string, sourceSessionId: meta.sourceSessionId }
+    : {
+        harnessId: conflict!.candidates[0]?.harnessId ?? "(unknown)",
+        sourceSessionId: conflict!.candidates[0]?.sourceSessionId ?? "(unknown)",
+      };
+  return { meta, conflict, ...identity };
+}
+
 export async function missingSessionError(storeDir: string, sessionId: string): Promise<GliaError> {
   const events = await ledgerEventsFor(storeDir, sessionId);
   const last = events[events.length - 1];

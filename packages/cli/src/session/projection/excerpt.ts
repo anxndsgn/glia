@@ -6,7 +6,7 @@
  * exact bytes come from the evidence locator.
  */
 import { oneLine } from "../../core/output/terminal.ts";
-import { termOccurrences, type TermRange } from "./term-match.ts";
+import { foldCase, termOccurrences, type TermRange } from "./term-match.ts";
 
 /** Bounded excerpt width in UTF-16 code units, before the ellipses. */
 export const EXCERPT_MAX_WIDTH = 120;
@@ -48,7 +48,8 @@ export function renderExcerpt(text: string, terms: string[], word = false): stri
 
 /** Case-insensitive literal occurrences of every term, as index ranges. */
 function findTermRanges(collapsed: string, terms: string[], word: boolean): Range[] {
-  return terms.flatMap((term) => termOccurrences(collapsed, term, word));
+  const folded = foldCase(collapsed);
+  return terms.flatMap((term) => termOccurrences(collapsed, term, word, folded));
 }
 
 function mergeRanges(ranges: Range[]): Range[] {

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { cp, mkdir, readdir, rm } from "node:fs/promises";
 import { GliaError } from "../../core/output/errors.ts";
-import { sessionDir, type SessionMeta } from "../storage/store-layout.ts";
+import { sessionDir, sessionsDir, type SessionMeta } from "../storage/store-layout.ts";
 
 export const CONFLICT_SCHEMA_VERSION = 1;
 
@@ -82,7 +82,7 @@ export async function readSessionConflict(
 export async function listConflictedSessionIds(storeDir: string): Promise<string[]> {
   const ids: string[] = [];
   try {
-    const entries = await readdir(join(storeDir, "session", "sessions"), { withFileTypes: true });
+    const entries = await readdir(sessionsDir(storeDir), { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory() && (await isSessionConflicted(storeDir, entry.name))) {
         ids.push(entry.name);

@@ -408,6 +408,9 @@ export async function runImport(
       // snapshot cannot be superseded by a well-behaved ignore/association
       // command before the Store write below.
       const decisionState = await readDiscoveryState(project.paths.discoveryFile);
+      // One Binding scan amortized across every staged candidate; ownership
+      // within this lease reads one consistent Binding snapshot.
+      const decisionBindings = new BindingIndex(project.home);
       let restoredTombstoneAssociation = false;
 
       // 3.–4. Revalidate sources, accept Source Bundles, commit the Store once.
@@ -439,10 +442,17 @@ export async function runImport(
           let confirmedTombstoneOverride =
             options.acceptTombstoned === true &&
             item.classified.classification.kind === "tombstoned";
-          const tombstonedNow = await isTombstoned(project.paths.storeDir, candidate.candidateId);
+          const tombstoneEvents = await ledgerEventsFor(
+            project.paths.storeDir,
+            candidate.candidateId,
+          );
+          const tombstonedNow = await isTombstoned(
+            project.paths.storeDir,
+            candidate.candidateId,
+            tombstoneEvents,
+          );
           if (tombstonedNow) {
-            const events = await ledgerEventsFor(project.paths.storeDir, candidate.candidateId);
-            const last = events.at(-1)!;
+            const last = tombstoneEvents.at(-1)!;
             const consent = item.tombstone;
             if (
               !confirmedTombstoneOverride ||
@@ -472,7 +482,12 @@ export async function runImport(
           }
           if (
             !confirmedTombstoneOverride &&
-            (await candidateProjectOwnership(project, decisionState, candidate)) !== "owned"
+            (await candidateProjectOwnership(
+              project,
+              decisionState,
+              candidate,
+              decisionBindings,
+            )) !== "owned"
           ) {
             report.outOfScope += 1;
             continue;
@@ -745,6 +760,7 @@ async function commitEvaluationState(
 
   const commitLocked = async (): Promise<void> => {
     const state = await readDiscoveryState(project.paths.discoveryFile);
+    const bindings = new BindingIndex(project.home);
     const pruned = fullDiscovery
       ? await collectPrunedEvaluations(project, baseline, state, discovery, updates)
       : { losses: [], resolvedCandidateIds: [] };
@@ -792,6 +808,7 @@ async function commitEvaluationState(
           project,
           state,
           liveCandidate ?? capture.classified.candidate,
+          bindings,
         )) === "other"
       ) {
         // Binding inference is a snapshot too. A concurrently opted-in
@@ -946,8 +963,12 @@ async function commitEvaluationState(
         const latestCapture = evaluationCaptures.get(candidateId);
         if (
           latestCapture !== undefined &&
-          (await candidateProjectOwnership(project, state, latestCapture.classified.candidate)) ===
-            "other"
+          (await candidateProjectOwnership(
+            project,
+            state,
+            latestCapture.classified.candidate,
+            bindings,
+          )) === "other"
         ) {
           if (current !== undefined) {
             delete state.evaluations[candidateId];
@@ -1214,12 +1235,11 @@ async function candidateProjectOwnership(
   project: LoadedProject,
   state: DiscoveryState,
   candidate: SessionCandidate,
+  bindings: BindingIndex,
 ): Promise<CandidateProjectOwnership> {
   const explicit = state.associations[candidate.candidateId];
   if (candidate.openingPath !== null) {
-    const resolution = await new BindingIndex(project.home).resolveOpeningPath(
-      candidate.openingPath,
-    );
+    const resolution = await bindings.resolveOpeningPath(candidate.openingPath);
     if (resolution.mapping !== null) {
       return resolution.mapping.projectId === project.declaration.projectId ? "owned" : "other";
     }

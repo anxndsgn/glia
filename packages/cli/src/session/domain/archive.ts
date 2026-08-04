@@ -11,9 +11,7 @@ import { WriterLease, writerLeaseTimeoutMs } from "../../core/store/lease.ts";
 import { prepareStoreForWrite } from "../../core/store/marker.ts";
 import { ProjectStore } from "../../core/store/store.ts";
 import { buildAndPublishLocked } from "../projection/publish.ts";
-import { readSessionMeta } from "../storage/store-layout.ts";
-import { readSessionConflict } from "./conflict.ts";
-import { missingSessionError } from "./deletion.ts";
+import { resolveSessionIdentity } from "./deletion.ts";
 
 export const ARCHIVE_SCHEMA_VERSION = 1;
 export const SESSION_ARCHIVE_DIR = "session/archive";
@@ -64,11 +62,7 @@ function parseArchiveMarker(path: string, input: unknown): ArchiveMarker {
   return marker as unknown as ArchiveMarker;
 }
 
-export async function readArchiveMarker(
-  storeDir: string,
-  sessionId: string,
-): Promise<ArchiveMarker | null> {
-  const path = archiveMarkerFile(storeDir, sessionId);
+async function readMarkerFile(path: string, sessionId: string): Promise<ArchiveMarker | null> {
   const file = Bun.file(path);
   if (!(await file.exists())) return null;
   let parsed: unknown;
@@ -86,6 +80,13 @@ export async function readArchiveMarker(
     );
   }
   return marker;
+}
+
+export async function readArchiveMarker(
+  storeDir: string,
+  sessionId: string,
+): Promise<ArchiveMarker | null> {
+  return await readMarkerFile(archiveMarkerFile(storeDir, sessionId), sessionId);
 }
 
 export async function archiveStateFor(storeDir: string, sessionId: string): Promise<ArchiveState> {
@@ -144,23 +145,9 @@ async function markersFromMaterialized(dir: string): Promise<Map<string, Archive
     return markers;
   }
   for (const name of names) {
-    const path = join(dir, name);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(await Bun.file(path).text());
-    } catch {
-      throw new GliaError("INTERNAL", `archive marker ${path} is not valid JSON`, { path });
-    }
-    const marker = parseArchiveMarker(path, parsed);
     const sessionId = name.slice(0, -".json".length);
-    if (marker.sessionId !== sessionId) {
-      throw new GliaError(
-        "INTERNAL",
-        `archive marker ${path} names ${marker.sessionId} instead of ${sessionId}`,
-        { path, sessionId, markerSessionId: marker.sessionId },
-      );
-    }
-    markers.set(sessionId, marker);
+    const marker = await readMarkerFile(join(dir, name), sessionId);
+    if (marker) markers.set(sessionId, marker);
   }
   return markers;
 }
@@ -219,26 +206,12 @@ export async function planArchiveTransition(
   nextState: ArchiveState,
 ): Promise<ArchivePlan> {
   const storeDir = project.paths.storeDir;
-  const store = new ProjectStore(storeDir);
-  if (!(await store.exists())) {
-    throw new GliaError(
-      "STORE_NOT_REALIZED",
-      "this Project has no local Store; run `glia sync` first",
-    );
-  }
-  const meta = await readSessionMeta(storeDir, sessionId);
-  const conflict = await readSessionConflict(storeDir, sessionId);
-  if (!meta && !conflict) throw await missingSessionError(storeDir, sessionId);
-  const identity = meta
-    ? { harnessId: meta.harnessId as string, sourceSessionId: meta.sourceSessionId }
-    : {
-        harnessId: conflict!.candidates[0]?.harnessId ?? "(unknown)",
-        sourceSessionId: conflict!.candidates[0]?.sourceSessionId ?? "(unknown)",
-      };
+  const { harnessId, sourceSessionId } = await resolveSessionIdentity(storeDir, sessionId);
   const previousState = await archiveStateFor(storeDir, sessionId);
   return {
     sessionId,
-    ...identity,
+    harnessId,
+    sourceSessionId,
     previousState,
     nextState,
     changed: previousState !== nextState,

@@ -20,14 +20,14 @@ import {
   writeDeletionPending,
 } from "../../core/store/deletion.ts";
 import { buildAndPublishLocked } from "../projection/publish.ts";
-import { readSessionConflict, type SessionConflictDoc } from "./conflict.ts";
-import { readSessionMeta } from "../storage/store-layout.ts";
+import { type SessionConflictDoc } from "./conflict.ts";
+import { sessionUnitPath } from "../storage/store-layout.ts";
 import {
   collapseLocalState,
   ledgerEventsFor,
   mergeLedgerEvents,
-  missingSessionError,
   purgePathsFor,
+  resolveSessionIdentity,
   serializeLedgerFile,
 } from "./deletion.ts";
 
@@ -50,32 +50,19 @@ export interface DeletePlan {
  */
 export async function planDelete(project: LoadedProject, sessionId: string): Promise<DeletePlan> {
   const storeDir = project.paths.storeDir;
-  const store = new ProjectStore(storeDir);
-  if (!(await store.exists())) {
-    throw new GliaError(
-      "STORE_NOT_REALIZED",
-      "this Project has no local Store; run `glia sync` first",
-    );
-  }
-  const meta = await readSessionMeta(storeDir, sessionId);
-  const conflict = await readSessionConflict(storeDir, sessionId);
-  if (!meta && !conflict) throw await missingSessionError(storeDir, sessionId);
-
+  const { conflict, harnessId, sourceSessionId } = await resolveSessionIdentity(
+    storeDir,
+    sessionId,
+  );
   const revisions = await gitOrThrow(
-    ["rev-list", "--count", "HEAD", "--", `session/sessions/${sessionId}/session.json`],
+    ["rev-list", "--count", "HEAD", "--", `${sessionUnitPath(sessionId)}/session.json`],
     storeDir,
   );
-  const identity = meta
-    ? { harnessId: meta.harnessId as string, sourceSessionId: meta.sourceSessionId }
-    : {
-        harnessId: conflict!.candidates[0]?.harnessId ?? "(unknown)",
-        sourceSessionId: conflict!.candidates[0]?.sourceSessionId ?? "(unknown)",
-      };
   const epoch = markerEpoch(await readLocalStoreMarker(storeDir));
   return {
     sessionId,
-    harnessId: identity.harnessId,
-    sourceSessionId: identity.sourceSessionId,
+    harnessId,
+    sourceSessionId,
     revisionCount: Math.max(1, Number(revisions.trim()) || 0),
     conflict,
     nextEpoch: epoch + 1,

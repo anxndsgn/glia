@@ -14,3 +14,12 @@ export async function resolveWorktreeTopLevel(cwd: string): Promise<string> {
   }
   return result.stdout.trim();
 }
+
+/** {@link resolveWorktreeTopLevel}, with "not a worktree" as null. */
+export async function worktreeTopLevelOrNull(cwd: string): Promise<string | null> {
+  try {
+    return await resolveWorktreeTopLevel(cwd);
+  } catch {
+    return null;
+  }
+}

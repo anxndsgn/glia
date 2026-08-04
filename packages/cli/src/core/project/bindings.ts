@@ -188,6 +188,10 @@ export class BindingIndex {
    * root has not opted in and must not be inherited by its parent Project.
    */
   async resolveOpeningPath(openingPath: string): Promise<OpeningPathResolution> {
+    // Deliberately unmemoized: the Bindings this index caches are one
+    // machine-local snapshot, but worktree topology is resolved live per
+    // decision so a path deleted or replaced mid-batch cannot serve a
+    // stale owner to later candidates.
     let probe = openingPath;
     let missing = false;
     for (;;) {
@@ -240,14 +244,6 @@ export class BindingIndex {
     }
     return owner;
   }
-}
-
-/** One-shot {@link BindingIndex.mapPath} for a single Opening Path. */
-export async function mapPathToProject(
-  home: string,
-  openingPath: string,
-): Promise<PathMapping | null> {
-  return await new BindingIndex(home).mapPath(openingPath);
 }
 
 export async function mapWorktreeToProject(

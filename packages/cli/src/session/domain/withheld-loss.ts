@@ -1,6 +1,5 @@
-import { readFile } from "node:fs/promises";
 import type { SourceIdentity } from "./identity.ts";
-import { writeJsonAtomic } from "../../core/state/atomic-file.ts";
+import { readFileIfPresent, writeJsonAtomic } from "../../core/state/atomic-file.ts";
 import { requireSupportedSchemaVersion } from "../../core/state/schema-version.ts";
 
 const LOSS_RECORD_LIMIT = 100;
@@ -18,13 +17,8 @@ interface WithheldLossState {
 }
 
 export async function readWithheldLosses(path: string): Promise<WithheldLossRecord[]> {
-  let text: string;
-  try {
-    text = await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
+  const text = await readFileIfPresent(path);
+  if (text === null) return [];
   const raw = JSON.parse(text) as Partial<WithheldLossState>;
   requireSupportedSchemaVersion("withheld loss state", path, raw.schemaVersion, 1);
   if (raw.schemaVersion !== 1 || !Array.isArray(raw.records)) return [];

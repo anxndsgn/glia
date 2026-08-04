@@ -6,6 +6,7 @@ import {
   type LoadedProject,
 } from "../../core/session-module.ts";
 import { GliaError } from "../../core/output/errors.ts";
+import { writeJsonAtomic } from "../../core/state/atomic-file.ts";
 import { WriterLease, writerLeaseTimeoutMs } from "../../core/store/lease.ts";
 import { prepareStoreForWrite } from "../../core/store/marker.ts";
 import { probeSqliteFts5 } from "../../core/store/sqlite-probe.ts";
@@ -71,9 +72,7 @@ async function writeCurrentPointer(
   currentFile: string,
   pointer: CurrentProjectionPointer,
 ): Promise<void> {
-  const tmp = `${currentFile}.tmp-${process.pid}`;
-  await Bun.write(tmp, JSON.stringify(pointer, null, 2) + "\n");
-  await rename(tmp, currentFile);
+  await writeJsonAtomic(currentFile, pointer);
 }
 
 /**

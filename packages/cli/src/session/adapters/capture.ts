@@ -103,14 +103,6 @@ export async function sourceCaptureStatus(
   return changed ? "changed" : "current";
 }
 
-/** Compatibility predicate for acceptance revalidation. */
-export async function sourcesMatchCapture(
-  candidate: SessionCandidate,
-  captured: CapturedBundle,
-): Promise<boolean> {
-  return (await sourceCaptureStatus(candidate, captured)) === "current";
-}
-
 /** Confirms the captured bytes still exist after waiting for the writer lease. */
 export async function stagingMatchesCapture(
   stagingDir: string,

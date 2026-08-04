@@ -20,6 +20,27 @@ export interface LoadProjectOptions {
   allowMissingStore?: boolean;
 }
 
+function declarationMismatchError(worktree: string, declared: string, owner: string): GliaError {
+  return new GliaError(
+    "BINDING_CONFLICT",
+    `worktree ${worktree} is already bound to project ${owner}, but glia.json declares ${declared}`,
+    {
+      worktree,
+      projectId: declared,
+      currentOwner: owner,
+      nextSteps: ["glia project list", `glia project forget ${shellQuote(worktree)}`],
+    },
+  );
+}
+
+function storeNotRealizedError(projectId: string): GliaError {
+  return new GliaError(
+    "STORE_NOT_REALIZED",
+    `project ${projectId} declares a remote but has no local Store; run \`glia sync\` first`,
+    { projectId, nextSteps: ["glia sync"] },
+  );
+}
+
 function refuseAliasOnlyWorktree(worktree: string, projectId: string): never {
   throw new GliaError(
     "ALIAS_ONLY_WORKTREE",
@@ -64,16 +85,7 @@ export async function loadProject(
         refuseAliasOnlyWorktree(worktree, mapped.projectId);
       }
       if (authored !== null && authored.projectId !== mapped.projectId) {
-        throw new GliaError(
-          "BINDING_CONFLICT",
-          `worktree ${worktree} is already bound to project ${mapped.projectId}, but glia.json declares ${authored.projectId}`,
-          {
-            worktree,
-            projectId: authored.projectId,
-            currentOwner: mapped.projectId,
-            nextSteps: ["glia project list", `glia project forget ${shellQuote(worktree)}`],
-          },
-        );
+        throw declarationMismatchError(worktree, authored.projectId, mapped.projectId);
       }
     }
     const projectId = authored?.projectId ?? mapped?.projectId ?? `prj_${Bun.randomUUIDv7()}`;
@@ -86,11 +98,7 @@ export async function loadProject(
     });
 
     if (options.allowMissingStore !== true && !(await new ProjectStore(paths.storeDir).exists())) {
-      throw new GliaError(
-        "STORE_NOT_REALIZED",
-        `project ${projectId} declares a remote but has no local Store; run \`glia sync\` first`,
-        { projectId, nextSteps: ["glia sync"] },
-      );
+      throw storeNotRealizedError(projectId);
     }
 
     return {
@@ -119,24 +127,11 @@ export async function loadProjectForRead(cwd: string, home: string): Promise<Loa
 
   if (mapped !== null) {
     if (authored !== null && authored.projectId !== mapped.projectId) {
-      throw new GliaError(
-        "BINDING_CONFLICT",
-        `worktree ${worktree} is already bound to project ${mapped.projectId}, but glia.json declares ${authored.projectId}`,
-        {
-          worktree,
-          projectId: authored.projectId,
-          currentOwner: mapped.projectId,
-          nextSteps: ["glia project list", `glia project forget ${shellQuote(worktree)}`],
-        },
-      );
+      throw declarationMismatchError(worktree, authored.projectId, mapped.projectId);
     }
     const paths = projectPaths(home, mapped.projectId);
     if (!(await new ProjectStore(paths.storeDir).exists())) {
-      throw new GliaError(
-        "STORE_NOT_REALIZED",
-        `project ${mapped.projectId} declares a remote but has no local Store; run \`glia sync\` first`,
-        { projectId: mapped.projectId, nextSteps: ["glia sync"] },
-      );
+      throw storeNotRealizedError(mapped.projectId);
     }
     const identity = await readReplicaIdentity(home);
     return {
