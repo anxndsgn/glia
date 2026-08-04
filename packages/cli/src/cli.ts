@@ -15,14 +15,19 @@ import {
   type RenderTarget,
 } from "./core/output/result.ts";
 import { colorEnabled } from "./core/output/terminal.ts";
-import { loadExistingProject, loadProject } from "./core/project/load.ts";
+import { loadExistingProject, loadProject, loadProjectForRead } from "./core/project/load.ts";
 import { gliaHome } from "./core/project/paths.ts";
 import { sessionModule } from "./session/module.ts";
 import { runWithSessionAdvisory } from "./session/commands/advisory-output.ts";
 import { runHookInvocation } from "./session/commands/hook-import.ts";
+import { confirmFirstImport } from "./session/commands/import.ts";
 import { currentSelfCommand, hookExecutablePath } from "./session/commands/hook-import.ts";
 import { runHookInstall, runHookRemove } from "./core/commands/hook.ts";
 import { runSetup, runSetupRemove } from "./core/commands/setup.ts";
+import {
+  decorateEnrollmentOutcome,
+  notEnrolledError,
+} from "./session/commands/enrollment-output.ts";
 import {
   projectCommandDefinitions,
   runProjectBind,
@@ -84,9 +89,13 @@ async function execute(
 
 async function loadRunContext(
   flags: GlobalFlags,
+  access: "read" | "write",
   options: { allowMissingStore?: boolean } = {},
 ): Promise<CommandRunContext> {
-  const project = await loadProject(process.cwd(), gliaHome(), options);
+  const project =
+    access === "read"
+      ? await loadProjectForRead(process.cwd(), gliaHome())
+      : await loadProject(process.cwd(), gliaHome(), options);
   return {
     project,
     env: Bun.env,
@@ -165,12 +174,31 @@ for (const definition of sessionModule.commands) {
       return;
     }
     await execute(definition.name, async (flags) => {
-      const ctx = await loadRunContext(flags);
-      return await runWithSessionAdvisory(
+      const access =
+        typeof definition.projectAccess === "function"
+          ? definition.projectAccess(options)
+          : definition.projectAccess;
+      let ctx: CommandRunContext;
+      if (definition.name === "import" && access === "write" && !flags.inputDisabled) {
+        const readCtx = await loadRunContext(flags, "read");
+        if (readCtx.project.enrollment.kind === "unenrolled") {
+          await confirmFirstImport(readCtx, options);
+        }
+        // Re-enter through the realizing loader even when already enrolled:
+        // write-side checks such as alias-only refusal still apply.
+        ctx = await loadRunContext(flags, "write");
+      } else {
+        ctx = await loadRunContext(flags, access);
+      }
+      if (ctx.project.enrollment.kind === "unenrolled" && definition.unenrolledRead === "error") {
+        throw notEnrolledError(ctx.project);
+      }
+      const outcome = await runWithSessionAdvisory(
         ctx,
         () => definition.run(ctx, args, options),
         target.stdout,
       );
+      return await decorateEnrollmentOutcome(ctx, outcome);
     });
   });
 }
@@ -180,12 +208,13 @@ program
   .description("synchronize the whole Store with its declared remote (explicit, idempotent)")
   .action(async () => {
     await execute("sync", async (flags) => {
-      const ctx = await loadRunContext(flags, { allowMissingStore: true });
-      return await runWithSessionAdvisory(
+      const ctx = await loadRunContext(flags, "write", { allowMissingStore: true });
+      const outcome = await runWithSessionAdvisory(
         ctx,
         () => runSyncCommand(ctx, [sessionModule]),
         target.stdout,
       );
+      return await decorateEnrollmentOutcome(ctx, outcome);
     });
   });
 
@@ -202,8 +231,8 @@ storeRemote
   .option("--yes", "accept the declaration change without prompting")
   .action(async (url: string, opts: { dryRun?: boolean; yes?: boolean }) => {
     await execute("store.remote.set", async (flags) => {
-      const ctx = await loadRunContext(flags, { allowMissingStore: true });
-      return await runWithSessionAdvisory(
+      const ctx = await loadRunContext(flags, "write", { allowMissingStore: true });
+      const outcome = await runWithSessionAdvisory(
         ctx,
         () =>
           runStoreRemoteSet(ctx, url, {
@@ -212,6 +241,7 @@ storeRemote
           }),
         target.stdout,
       );
+      return await decorateEnrollmentOutcome(ctx, outcome);
     });
   });
 storeRemote
@@ -219,8 +249,13 @@ storeRemote
   .description("show the declared Store remote")
   .action(async () => {
     await execute("store.remote.show", async (flags) => {
-      const ctx = await loadRunContext(flags, { allowMissingStore: true });
-      return await runWithSessionAdvisory(ctx, () => runStoreRemoteShow(ctx), target.stdout);
+      const ctx = await loadRunContext(flags, "read");
+      const outcome = await runWithSessionAdvisory(
+        ctx,
+        () => runStoreRemoteShow(ctx),
+        target.stdout,
+      );
+      return await decorateEnrollmentOutcome(ctx, outcome);
     });
   });
 
@@ -356,12 +391,13 @@ program
   .description("report Project, Store, Binding, and Session state (read-only)")
   .action(async () => {
     await execute("status", async (flags) => {
-      const ctx = await loadRunContext(flags, { allowMissingStore: true });
-      return await runWithSessionAdvisory(
+      const ctx = await loadRunContext(flags, "read");
+      const outcome = await runWithSessionAdvisory(
         ctx,
         () => runStatus(ctx.project, [sessionModule], ctx.env),
         target.stdout,
       );
+      return await decorateEnrollmentOutcome(ctx, outcome);
     });
   });
 

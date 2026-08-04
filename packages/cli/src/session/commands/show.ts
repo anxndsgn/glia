@@ -26,6 +26,8 @@ function subagentLines(detail: SessionDetail): string[] {
 
 export const showCommand: CommandDefinition = {
   name: "show",
+  projectAccess: "read",
+  unenrolledRead: "error",
   description: "show one accepted Session's objective metadata",
   arguments: [{ name: "session-id", description: "the Session ID" }],
   async run(ctx, args): Promise<CommandOutcome> {

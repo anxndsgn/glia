@@ -4,6 +4,8 @@ import { readLocalLedgerEvents, tombstoneSummaries } from "../domain/deletion.ts
 
 export const tombstonesCommand: CommandDefinition = {
   name: "tombstones",
+  projectAccess: "read",
+  unenrolledRead: "empty",
   description: "list the Deletion Ledger as events (read-only, no network)",
   async run(ctx): Promise<CommandOutcome> {
     const events = await readLocalLedgerEvents(ctx.project.paths.storeDir);

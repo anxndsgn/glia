@@ -4,6 +4,7 @@ import { confirmProceed } from "../output/confirm.ts";
 import { GliaError } from "../output/errors.ts";
 import type { CommandOutcome } from "../output/result.ts";
 import { validateStoreRemoteUrl } from "../store/remote-url.ts";
+import { assertProjectWritable, projectIsEnrolled } from "../session-module.ts";
 
 export interface StoreRemoteSetOptions {
   dryRun: boolean;
@@ -65,6 +66,7 @@ export async function runStoreRemoteSet(
     }
   }
 
+  assertProjectWritable(ctx.project);
   ctx.project.declaration.store = { ...ctx.project.declaration.store, remote: url };
   await writeDeclaration(ctx.project.worktree, ctx.project.declaration);
   return {
@@ -79,6 +81,8 @@ export function runStoreRemoteShow(ctx: CommandRunContext): CommandOutcome {
     json: { remote, mode: remote ? "remote" : "local_only" },
     human:
       remote ??
-      "(none) — this Project is local_only; declare one with `glia store remote set <url>`",
+      (projectIsEnrolled(ctx.project)
+        ? "(none) — this Project is local_only; declare one with `glia store remote set <url>`"
+        : "(none) — no Store remote is declared; enroll with `glia import` or declare one with `glia store remote set <url>`"),
   };
 }

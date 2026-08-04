@@ -15,6 +15,7 @@ import {
 import type { ArchiveState } from "../domain/archive.ts";
 import type { SessionLabelSource } from "../adapters/label.ts";
 import { SUBAGENT_BUNDLE_PREFIX } from "../adapters/subagent.ts";
+import { createProjectionSchema, EMPTY_PROJECTION_PATH } from "./schema.ts";
 
 export interface SessionRow extends SubagentColumns {
   sessionId: string;
@@ -156,6 +157,11 @@ export interface SearchResult<M> {
 }
 
 export function openProjection(dbPath: string): Database {
+  if (dbPath === EMPTY_PROJECTION_PATH) {
+    const db = new Database(":memory:");
+    createProjectionSchema(db);
+    return db;
+  }
   return new Database(dbPath, { readonly: true });
 }
 

@@ -193,6 +193,10 @@ export const sessionModule: SessionModule<SessionConfig> = {
           projectLastOutcome: projectHook?.outcome ?? null,
         },
         ignoredCandidates,
+        harnesses: {
+          unavailable: discovery.unavailableHarnesses,
+          failures: discovery.adapterFailures,
+        },
         projection:
           pointer === null
             ? { state: "absent" }

@@ -93,10 +93,75 @@ export async function loadProject(
       );
     }
 
-    return { home, worktree, declaration, paths, replicaId: identity.replicaId };
+    return {
+      home,
+      worktree,
+      declaration,
+      paths,
+      replicaId: identity.replicaId,
+      enrollment: { kind: "enrolled" },
+    };
   } finally {
     lease.release();
   }
+}
+
+const SYNTHESIZED_REPLICA_ID = "__glia_read_only__";
+
+/**
+ * Resolves an enrolled Project for reads, or synthesizes a read-only Project
+ * whose paths are deliberately unrelated to any declared Project identity.
+ */
+export async function loadProjectForRead(cwd: string, home: string): Promise<LoadedProject> {
+  const worktree = await resolveWorktreeTopLevel(cwd);
+  const authored = await readDeclaration(worktree);
+  const mapped = await mapWorktreeToProject(home, worktree);
+
+  if (mapped !== null) {
+    if (authored !== null && authored.projectId !== mapped.projectId) {
+      throw new GliaError(
+        "BINDING_CONFLICT",
+        `worktree ${worktree} is already bound to project ${mapped.projectId}, but glia.json declares ${authored.projectId}`,
+        {
+          worktree,
+          projectId: authored.projectId,
+          currentOwner: mapped.projectId,
+          nextSteps: ["glia project list", `glia project forget ${shellQuote(worktree)}`],
+        },
+      );
+    }
+    const paths = projectPaths(home, mapped.projectId);
+    if (!(await new ProjectStore(paths.storeDir).exists())) {
+      throw new GliaError(
+        "STORE_NOT_REALIZED",
+        `project ${mapped.projectId} declares a remote but has no local Store; run \`glia sync\` first`,
+        { projectId: mapped.projectId, nextSteps: ["glia sync"] },
+      );
+    }
+    const identity = await readReplicaIdentity(home);
+    return {
+      home,
+      worktree,
+      declaration: authored ?? createDeclaration(mapped.projectId),
+      paths,
+      replicaId: identity?.replicaId ?? SYNTHESIZED_REPLICA_ID,
+      enrollment: { kind: "enrolled" },
+    };
+  }
+
+  const synthesizedProjectId = `prj_read_${Bun.randomUUIDv7()}`;
+  const declaration = authored ?? createDeclaration(synthesizedProjectId);
+  return {
+    home,
+    worktree,
+    declaration: { ...declaration, projectId: synthesizedProjectId },
+    paths: projectPaths(home, synthesizedProjectId),
+    replicaId: SYNTHESIZED_REPLICA_ID,
+    enrollment: {
+      kind: "unenrolled",
+      bindingOverlay: { worktree, projectId: synthesizedProjectId },
+    },
+  };
 }
 
 /**
@@ -125,5 +190,6 @@ export async function loadExistingProject(
     declaration: authored ?? createDeclaration(projectId),
     paths,
     replicaId: identity.replicaId,
+    enrollment: { kind: "enrolled" },
   };
 }

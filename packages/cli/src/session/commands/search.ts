@@ -51,6 +51,8 @@ const SORT_MODES = "relevance, time";
 
 export const searchCommand: CommandDefinition = {
   name: "search",
+  projectAccess: "read",
+  unenrolledRead: "empty",
   description: "search accepted Store evidence; never imports and never changes the Store",
   arguments: [{ name: "[query]", description: "text query; every term matches as a substring" }],
   options: [

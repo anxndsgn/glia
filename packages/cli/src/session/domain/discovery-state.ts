@@ -1,5 +1,5 @@
 import { requireSupportedSchemaVersion } from "../../core/state/schema-version.ts";
-import type { LoadedProject } from "../../core/session-module.ts";
+import { assertProjectWritable, type LoadedProject } from "../../core/session-module.ts";
 import { writeJsonAtomic } from "../../core/state/atomic-file.ts";
 import { WriterLease, writerLeaseTimeoutMs } from "../../core/store/lease.ts";
 import type { PersistedEvaluation } from "./secret-detection.ts";
@@ -88,6 +88,7 @@ export async function mutateDiscoveryState(
   env: Record<string, string | undefined>,
   mutate: (state: DiscoveryState) => boolean | Promise<boolean>,
 ): Promise<void> {
+  assertProjectWritable(project);
   const lease = await WriterLease.acquire(project.paths.writerLockFile, writerLeaseTimeoutMs(env));
   let bindingsLease: WriterLease | null = null;
   try {

@@ -1,6 +1,7 @@
 export type ErrorCode =
   | "USAGE"
   | "NOT_A_GIT_WORKTREE"
+  | "NOT_ENROLLED"
   | "STORE_NOT_REALIZED"
   | "PROJECT_NOT_FOUND"
   | "PATH_NOT_BOUND"

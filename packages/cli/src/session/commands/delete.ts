@@ -8,6 +8,7 @@ import { planDelete, runDelete, type DeletePlan } from "../domain/delete.ts";
 
 export const deleteCommand: CommandDefinition = {
   name: "delete",
+  projectAccess: "write",
   description:
     "truly delete one Session: purge it from the Store and its Git history, leave a payload-free tombstone",
   arguments: [{ name: "session-id", description: "the Session ID to delete" }],

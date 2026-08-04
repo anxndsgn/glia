@@ -1,13 +1,17 @@
 import { join } from "node:path";
 import { mkdir, readdir, rename, rm } from "node:fs/promises";
-import type { LoadedProject } from "../../core/session-module.ts";
+import {
+  assertProjectWritable,
+  projectIsEnrolled,
+  type LoadedProject,
+} from "../../core/session-module.ts";
 import { GliaError } from "../../core/output/errors.ts";
 import { WriterLease, writerLeaseTimeoutMs } from "../../core/store/lease.ts";
 import { prepareStoreForWrite } from "../../core/store/marker.ts";
 import { probeSqliteFts5 } from "../../core/store/sqlite-probe.ts";
 import { ProjectStore } from "../../core/store/store.ts";
 import { buildProjection } from "./build.ts";
-import { PROJECTION_VERSION } from "./schema.ts";
+import { EMPTY_PROJECTION_PATH, PROJECTION_VERSION } from "./schema.ts";
 
 export interface CurrentProjectionPointer {
   schemaVersion: number;
@@ -58,6 +62,7 @@ async function freshProjectionPath(
  * projection state means "no result", not "repair it now".
  */
 export async function currentProjectionPath(project: LoadedProject): Promise<string | null> {
+  if (!projectIsEnrolled(project)) return null;
   const head = await new ProjectStore(project.paths.storeDir).head();
   return await freshProjectionPath(project.paths, head);
 }
@@ -79,6 +84,7 @@ export async function buildAndPublishLocked(
   project: LoadedProject,
   storeCommit: string,
 ): Promise<string> {
+  assertProjectWritable(project);
   probeSqliteFts5();
   const { indexesDir, currentProjectionFile, storeDir } = project.paths;
   await mkdir(indexesDir, { recursive: true });
@@ -125,6 +131,9 @@ export async function ensureProjection(
   project: LoadedProject,
   env: Record<string, string | undefined>,
 ): Promise<ProjectionHandle> {
+  if (!projectIsEnrolled(project)) {
+    return { dbPath: EMPTY_PROJECTION_PATH, storeCommit: "", stale: false };
+  }
   const { currentProjectionFile, indexesDir, storeDir, writerLockFile } = project.paths;
   const head = await new ProjectStore(storeDir).head();
 

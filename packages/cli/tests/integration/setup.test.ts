@@ -237,4 +237,31 @@ describe("setup umbrella", () => {
       },
     ]);
   });
+
+  test("declining the single backlog question keeps hooks installed and the repository unenrolled", async () => {
+    await mkdir(env.claudeHome, { recursive: true });
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "setup-declined",
+      cwd: env.worktree,
+    });
+    let prompts = 0;
+    let promptText = "";
+    const outcome = await runSetup(
+      setupContext({
+        inputDisabled: false,
+        confirmImport: async (message) => {
+          prompts += 1;
+          promptText = message;
+          return false;
+        },
+      }),
+    );
+
+    expect(prompts).toBe(1);
+    expect(promptText).toContain("Enroll repository");
+    expect(promptText).toContain("SessionEnd: capture future Sessions automatically");
+    expect(outcome.human).toContain("Backlog import skipped");
+    expect(await Bun.file(join(env.claudeHome, "settings.json")).exists()).toBeTrue();
+    expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();
+  });
 });

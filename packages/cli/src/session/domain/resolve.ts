@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { cp, mkdir, rm } from "node:fs/promises";
-import type { LoadedProject } from "../../core/session-module.ts";
+import { assertProjectWritable, type LoadedProject } from "../../core/session-module.ts";
 import { GliaError } from "../../core/output/errors.ts";
 import { prepareStoreForWrite } from "../../core/store/marker.ts";
 import { WriterLease, writerLeaseTimeoutMs } from "../../core/store/lease.ts";
@@ -34,6 +34,7 @@ export async function resolveSessionConflict(
   sessionId: string,
   digest: string,
 ): Promise<ResolveReport> {
+  assertProjectWritable(project);
   const { storeDir } = project.paths;
   const lease = await WriterLease.acquire(project.paths.writerLockFile, writerLeaseTimeoutMs(env));
   try {

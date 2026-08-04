@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { rm } from "node:fs/promises";
-import type { LoadedProject } from "../../core/session-module.ts";
+import { assertProjectWritable, type LoadedProject } from "../../core/session-module.ts";
 import { GliaError } from "../../core/output/errors.ts";
 import { WriterLease, writerLeaseTimeoutMs } from "../../core/store/lease.ts";
 import { git, gitOrThrow } from "../../core/store/git.ts";
@@ -111,6 +111,7 @@ export async function runDelete(
   env: Record<string, string | undefined>,
   sessionId: string,
 ): Promise<DeleteReport> {
+  assertProjectWritable(project);
   const storeDir = project.paths.storeDir;
   const lease = await WriterLease.acquire(project.paths.writerLockFile, writerLeaseTimeoutMs(env));
   try {

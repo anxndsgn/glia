@@ -47,13 +47,28 @@ glia search "authentication failure"
 glia view <session-id>
 ```
 
-Glia creates the Project, Replica identity, Binding, and local Store lazily under `~/.glia`. It does not add a file to the code repository.
+Read commands do not enroll a repository. Before enrollment, `list`, `search`,
+`conflicts`, `tombstones`, `candidates`, `status`, `store remote show`, and
+`import --dry-run` report an empty or preview result without creating anything
+under `~/.glia`. Their JSON results carry `enrolled: false`, a null
+`projectId`, and a `not_enrolled` advisory with the number of Candidates that
+would be captured. Direct requests for a Session (`view`, `show`, and `export`)
+return `NOT_ENROLLED` instead of pretending the Session ID is missing.
+
+Enrollment happens when you run a command that keeps or changes Project data,
+such as `import`, `accept`, `archive`, `delete`, `resolve`, `sync`, `setup`, or
+`store remote set`. The first interactive `glia import` explains the Store,
+backlog, secret-withholding, and installed-hook consequences before creating
+the Project, Replica identity, Binding, and local Store under `~/.glia`.
+Scripted `--no-input` and `--json` imports proceed without prompting. Glia does
+not add a file to the code repository unless you explicitly run
+`store remote set`, which writes `glia.json`.
 
 Once a repository has a Binding, ending a Claude Code or Codex Session triggers
 a silent background import for that Project. Hook runs outside a Git worktree or
-inside a repository that has never opted in are quiet no-ops. Use `glia status`
+inside a repository that has never enrolled are quiet no-ops. Use `glia status`
 to inspect both machine-global hook liveness and the latest hook import for the
-current Project.
+current Project, or to diagnose an unenrolled repository without changing it.
 
 Inspect and manage machine-local Bindings from any directory:
 

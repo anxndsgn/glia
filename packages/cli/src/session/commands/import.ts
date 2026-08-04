@@ -2,9 +2,10 @@ import { PROJECTION_DEFERRED_NOTE } from "../../core/session-module.ts";
 import type { CommandDefinition, CommandRunContext } from "../../core/session-module.ts";
 import type { CommandOutcome } from "../../core/output/result.ts";
 import { GliaError } from "../../core/output/errors.ts";
+import { confirmProceed } from "../../core/output/confirm.ts";
 import { withProgress } from "../../core/output/progress.ts";
 import { isHarnessId, type HarnessId } from "../../core/harnesses/ids.ts";
-import { runImport, type ImportReport } from "../domain/import.ts";
+import { previewEnrollment, runImport, type ImportReport } from "../domain/import.ts";
 import { discoverCandidates } from "../domain/discover.ts";
 import {
   associateCandidate,
@@ -16,6 +17,8 @@ import { familyHintText } from "./family-display.ts";
 import type { SecretHit, UnscannedFile } from "../domain/secret-detection.ts";
 import { renderSuspectedHits } from "./render-secret-hits.ts";
 import { ageDays } from "../domain/advisories.ts";
+import { HARNESS_IDS } from "../../core/harnesses/ids.ts";
+import { managedHookInstalled } from "../../core/hooks/config.ts";
 
 export function parseHarnessOption(value: unknown): HarnessId | null {
   if (value === undefined) return null;
@@ -26,8 +29,46 @@ export function parseHarnessOption(value: unknown): HarnessId | null {
   return harness;
 }
 
+export async function confirmFirstImport(
+  ctx: CommandRunContext,
+  options: Record<string, unknown>,
+  confirm: (message: string) => Promise<boolean> = confirmProceed,
+): Promise<void> {
+  const harness = parseHarnessOption(options["harness"]);
+  const preview = await previewEnrollment(ctx.project, ctx.env, harness);
+  const hooksInstalled = (
+    await Promise.all(HARNESS_IDS.map((id) => managedHookInstalled(id, ctx.env).catch(() => false)))
+  ).some(Boolean);
+  const lines = [
+    `Enroll repository ${ctx.project.worktree} with Glia?`,
+    "",
+    `  Store: create a Git-backed Store under ${ctx.project.home}/projects`,
+    `  Sessions: import ${preview.wouldImport} Session(s) now from ${preview.discovered} discovered Candidate(s)`,
+    `  Secret review: withhold ${preview.withheld} Candidate(s) pending explicit acceptance`,
+  ];
+  if (preview.pending > 0) {
+    lines.push(`  Association: ${preview.pending} Candidate(s) need a Project decision first`);
+  }
+  if (hooksInstalled) {
+    lines.push("  SessionEnd: capture future Sessions automatically for this repository");
+  }
+  if (preview.sourceErrors.length > 0) {
+    lines.push(
+      `  Source errors: ${preview.sourceErrors.length} Candidate(s) could not be previewed`,
+    );
+  }
+  lines.push("", "Continue?");
+  if (!(await confirm(lines.join("\n")))) {
+    throw new GliaError("CANCELLED", "import cancelled; the repository remains unenrolled", {
+      nextSteps: ["glia import"],
+    });
+  }
+}
+
 export const importCommand: CommandDefinition = {
   name: "import",
+  projectAccess: (options) => (options["dryRun"] === true ? "read" : "write"),
+  unenrolledRead: "empty",
   description:
     "discover Sessions, accept associated Candidates into the Store, and refresh the projection; " +
     "on a terminal, pending and flagged Candidates are resolved with prompts (skip with --no-input)",

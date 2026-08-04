@@ -167,6 +167,17 @@ async function readConfig(path: string): Promise<string | null> {
   }
 }
 
+/** Read-only proof that the exact Glia-managed SessionEnd hook is installed. */
+export async function managedHookInstalled(
+  harnessId: HarnessId,
+  env: Record<string, string | undefined>,
+): Promise<boolean> {
+  const existing = await readConfig(hookConfigPath(harnessId, env));
+  if (existing === null) return false;
+  const located = locate(existing);
+  return located.sessionEntries.some(isManagedHookGroup);
+}
+
 export async function installHookConfig(
   harnessId: HarnessId,
   env: Record<string, string | undefined>,

@@ -1,12 +1,14 @@
 import type { HarnessId } from "../harnesses/ids.ts";
 import type { CommandOutcome } from "../output/result.ts";
 import { confirmProceed } from "../output/confirm.ts";
+import { GliaError } from "../output/errors.ts";
 import { withProgress } from "../output/progress.ts";
 import { gliaHome } from "../project/paths.ts";
-import { loadProject } from "../project/load.ts";
+import { loadProject, loadProjectForRead } from "../project/load.ts";
 import { resolveWorktreeTopLevel } from "../project/resolve.ts";
 import { runImport, type ImportReport } from "../../session/domain/import.ts";
 import { humanImportReport } from "../../session/commands/import.ts";
+import { confirmFirstImport } from "../../session/commands/import.ts";
 import { runSkillInstall, runSkillRemove } from "./skill.ts";
 import {
   harnessIsPresent,
@@ -76,7 +78,28 @@ export async function runSetup(ctx: SetupCommandContext): Promise<CommandOutcome
       "Backlog import skipped because input is disabled; run `glia import` here to opt in this repository.";
   } else if (worktree !== null) {
     const confirm = ctx.confirmImport ?? confirmProceed;
-    if (await confirm("Import this repository's existing Session backlog now?")) {
+    const readProject = await loadProjectForRead(worktree, gliaHome(ctx.env));
+    let accepted = false;
+    if (readProject.enrollment.kind === "unenrolled") {
+      try {
+        await confirmFirstImport(
+          {
+            project: readProject,
+            env: ctx.env,
+            jsonMode: ctx.jsonMode,
+            inputDisabled: ctx.inputDisabled,
+          },
+          {},
+          confirm,
+        );
+        accepted = true;
+      } catch (error) {
+        if (!(error instanceof GliaError) || error.code !== "CANCELLED") throw error;
+      }
+    } else {
+      accepted = await confirm("Import this repository's existing Session backlog now?");
+    }
+    if (accepted) {
       importReport = await progress(
         ctx,
         "Importing existing Session backlog",

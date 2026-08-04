@@ -99,6 +99,7 @@ describe("compiled CLI contract", () => {
       result: { projects: [] },
     });
 
+    expect((await glia(["--json", "import"])).exitCode).toBe(0);
     const status = await glia(["--json", "status"]);
     const projectId = (JSON.parse(status.stdout) as { result: { projectId: string } }).result
       .projectId;
@@ -141,8 +142,8 @@ describe("compiled CLI contract", () => {
   });
 
   test("detached hook returns promptly, stays silent, and imports in the background", async () => {
-    // Any ordinary command is the explicit opt-in that realizes the Binding.
-    expect((await glia(["status"])).exitCode).toBe(0);
+    // An enrolling command realizes the Binding; reads alone deliberately do not.
+    expect((await glia(["import"])).exitCode).toBe(0);
     await writeClaudeSession(env.claudeHome, {
       sessionId: "hook-blackbox",
       cwd: env.worktree,
@@ -199,7 +200,7 @@ describe("compiled CLI contract", () => {
     expect(run.exitCode).not.toBe(0);
     const doc = JSON.parse(run.stdout) as { ok: boolean; error: { code: string } };
     expect(doc.ok).toBeFalse();
-    expect(doc.error.code).toBe("NOT_FOUND");
+    expect(doc.error.code).toBe("NOT_ENROLLED");
   });
 
   test("session view honors the CLI output contract: human default, one JSON document, USAGE exit", async () => {
@@ -420,8 +421,71 @@ describe("compiled CLI contract", () => {
   test("status is read-only and reports store mode, roots, and projection freshness", async () => {
     const run = await glia(["status"]);
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("local_only");
+    expect(run.stdout).toContain("not enrolled");
     expect(run.stdout).toContain(env.worktree);
+    expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();
+  });
+
+  test("unenrolled reads stay side-effect free and expose one typed enrollment contract", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "unenrolled-preview",
+      cwd: env.worktree,
+      userText: "UNENROLLEDPROBE",
+    });
+
+    for (const args of [
+      ["--json", "list"],
+      ["--json", "search", "UNENROLLEDPROBE"],
+      ["--json", "conflicts"],
+      ["--json", "tombstones"],
+      ["--json", "candidates", "--all"],
+      ["--json", "import", "--dry-run"],
+      ["--json", "status"],
+      ["--json", "store", "remote", "show"],
+    ]) {
+      const run = await glia(args);
+      expect(run.exitCode).toBe(0);
+      expect(run.stdout.trim().split("\n")).toHaveLength(1);
+      const doc = JSON.parse(run.stdout) as {
+        result: {
+          enrolled: boolean;
+          projectId: string | null;
+          advisories: { kind: string; count: number }[];
+        };
+      };
+      expect(doc.result.enrolled).toBeFalse();
+      expect(doc.result.projectId).toBeNull();
+      expect(doc.result.advisories).toContainEqual({ kind: "not_enrolled", count: 1 });
+      expect(doc.result.advisories.some((entry) => entry.kind === "importable")).toBeFalse();
+      expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();
+    }
+
+    const humanSearch = await glia(["search", "UNENROLLEDPROBE"]);
+    expect(humanSearch.exitCode).toBe(0);
+    expect(humanSearch.stdout).toContain("not enrolled with Glia");
+    expect(humanSearch.stdout).not.toContain("are importable");
+
+    for (const args of [
+      ["--json", "view", "ses_00000000000000000000000000000000"],
+      ["--json", "show", "ses_00000000000000000000000000000000"],
+      [
+        "--json",
+        "export",
+        "ses_00000000000000000000000000000000",
+        "--output",
+        join(env.root, "export-never-created"),
+      ],
+    ]) {
+      const run = await glia(args);
+      expect(run.exitCode).toBe(1);
+      const doc = JSON.parse(run.stdout) as {
+        error: { code: string; details: { nextSteps: string[] } };
+      };
+      expect(doc.error.code).toBe("NOT_ENROLLED");
+      expect(doc.error.details.nextSteps).toEqual(["glia import"]);
+      expect(run.stdout).not.toContain("__glia_unenrolled_read__");
+    }
+    expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();
   });
 
   test("sync without a remote fails fast and store remote set validates offline with confirmation", async () => {
