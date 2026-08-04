@@ -19,7 +19,7 @@ import {
   validateStoreMarker,
 } from "./marker.ts";
 import { COMMIT_IDENTITY, ProjectStore } from "./store.ts";
-import { writeFetchState, writeSyncState } from "./sync-state.ts";
+import { writeSyncState } from "./sync-state.ts";
 import { readRemoteTrackingHead, writeRemoteTrackingHead } from "./remote-tracking.ts";
 import {
   compareEvents,
@@ -244,7 +244,7 @@ export async function runSync(
 /**
  * The mutable outcome of inward integration passes: what was applied,
  * merged, frozen, or found pending. `runSync` carries one across its
- * push-retry attempts; `runInboundSync` uses one for its single pass.
+ * push-retry attempts.
  */
 interface IntegrateState {
   pendingState: DeletionPendingState | null;
@@ -276,10 +276,9 @@ function initialIntegrateState(pendingState: DeletionPendingState | null): Integ
  * One inward pass of the synchronization mechanism: fetch the remote
  * head and integrate it into this Replica's Store — identity validation,
  * rewrite verification by recomputation, fast-forward or module-owned
- * merge with the conflict floor. This is the directional core both verbs
- * compose: `runSync` follows it with the outward push, `runInboundSync`
- * runs it alone. The caller holds the writer lease. Returns the fetched
- * remote head, or null for an empty remote.
+ * merge with the conflict floor. `runSync` follows it with the outward
+ * push. The caller holds the writer lease. Returns the fetched remote
+ * head, or null for an empty remote.
  */
 async function integrateRemoteOnce(
   project: LoadedProject,
@@ -372,82 +371,6 @@ async function applyDeletionHooks(
         events.sort(compareEvents).map((e) => e.event),
       );
     }
-  }
-}
-
-export interface InboundSyncReport {
-  remote: string;
-  classification: SyncClassification;
-  head: string;
-  /** Store units this Replica received from the remote. */
-  pulled: number;
-  merged: number;
-  conflicted: string[];
-  recoveryCommit: string | null;
-  backfillCommit: string | null;
-}
-
-/**
- * The inward half of synchronization alone: fetch + integrate, never
- * push — the remote's refs are unchanged by this call.
- * Locally pending deletion propagation stays pending and the machine's
- * sync state is untouched: this is not a synchronization — `glia sync`
- * remains that verb.
- */
-export async function runInboundSync(
-  project: LoadedProject,
-  env: Record<string, string | undefined>,
-  modules: readonly SessionModule[],
-): Promise<InboundSyncReport> {
-  const remote = project.declaration.store.remote;
-  if (!remote) {
-    throw new GliaError(
-      "NO_STORE_REMOTE",
-      "this Project's Store is local_only; declare a remote with `glia store remote set <url>`",
-      { nextSteps: ["glia store remote set <url>"] },
-    );
-  }
-  const lease = await WriterLease.acquire(project.paths.writerLockFile, writerLeaseTimeoutMs(env));
-  try {
-    const store = new ProjectStore(project.paths.storeDir);
-    if (!(await store.exists())) {
-      await bootstrapStoreFromRemote(project, remote);
-    }
-    const projectId = project.declaration.projectId;
-    const prepared = await prepareStoreForWrite(store, projectId, {
-      recoveryDetails: { projectId, replicaId: project.replicaId },
-    });
-    const startLocalHead = await store.head();
-    const pendingState = await readDeletionPending(project.paths.deletionPendingFile);
-    const state = initialIntegrateState(pendingState);
-
-    const remoteHead = await integrateRemoteOnce(project, modules, store, remote, state);
-    const head = await store.head();
-    if (remoteHead !== null && !state.rewriteInvolved) {
-      // The fetched head is now part of local history; sessioning it as
-      // the last synchronized remote state keeps the non-fast-forward
-      // guard's baseline accurate. Rewrite integration maintains the
-      // tracking ref itself.
-      await writeRemoteTrackingHead(store.dir, remote, remoteHead);
-    }
-    await applyDeletionHooks(project, modules, state.appliedEvents);
-    if (state.rewriteInvolved) {
-      await purgeUnreachableObjects(store.dir);
-    }
-    const pulled = await countUnits(store.dir, modules, startLocalHead, head, state.conflicted);
-    await writeFetchState(project.paths.syncStateFile, new Date().toISOString());
-    return {
-      remote,
-      classification: state.classification,
-      head,
-      pulled,
-      merged: state.mergedCount,
-      conflicted: [...state.conflicted].sort(),
-      recoveryCommit: prepared.recoveryCommit,
-      backfillCommit: prepared.backfillCommit,
-    };
-  } finally {
-    lease.release();
   }
 }
 
@@ -821,7 +744,7 @@ async function mergeDiverged(
   }
 
   const divergent: string[] = [];
-  const deterministicallyMerged: string[] = [];
+  const deterministicallyMerged = new Set<string>();
   let merged = 0;
   for (const unit of local.units) {
     if (!remote.units.has(unit)) continue;
@@ -843,7 +766,7 @@ async function mergeDiverged(
     }
     owners.set(unit, owner);
     if (owner.mergeStoreUnitFor?.(unit) === true && owner.mergeStoreUnit) {
-      deterministicallyMerged.push(unit);
+      deterministicallyMerged.add(unit);
     }
   }
 
@@ -876,8 +799,8 @@ async function mergeDiverged(
         local: conflictSide(storeDir, localHead, unit),
         remote: conflictSide(storeDir, remoteHead, unit),
       };
-      if (owner.mergeStoreUnitFor?.(unit) === true && owner.mergeStoreUnit) {
-        await owner.mergeStoreUnit(project, sides);
+      if (deterministicallyMerged.has(unit)) {
+        await owner.mergeStoreUnit!(project, sides);
         merged += 1;
       } else {
         await owner.onStoreUnitConflict!(project, sides);
@@ -920,8 +843,8 @@ async function mergeDiverged(
     const trailer = JSON.stringify({
       op: "store.sync.merge",
       projectId: project.declaration.projectId,
-      merged: deterministicallyMerged.sort(),
-      conflicted: divergent.filter((unit) => !deterministicallyMerged.includes(unit)).sort(),
+      merged: [...deterministicallyMerged].sort(),
+      conflicted: divergent.filter((unit) => !deterministicallyMerged.has(unit)).sort(),
     });
     await gitOrThrow(
       [
@@ -940,7 +863,7 @@ async function mergeDiverged(
 
   return {
     merged,
-    conflicted: divergent.filter((unit) => !deterministicallyMerged.includes(unit)).sort(),
+    conflicted: divergent.filter((unit) => !deterministicallyMerged.has(unit)).sort(),
   };
 }
 

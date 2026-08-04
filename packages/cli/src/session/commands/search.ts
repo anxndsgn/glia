@@ -141,36 +141,43 @@ export const searchCommand: CommandDefinition = {
     const db = openProjection(handle.dbPath);
     try {
       const projection = { storeCommit: handle.storeCommit, stale: handle.stale };
-      if (params.query !== null) {
-        const result = searchText(db, params);
+      const finish = async <M extends { eventSeq: number; runLastSeq: number }>(
+        mode: string,
+        result: SearchResult<M>,
+        matchJson: (match: M) => object,
+        renderMatch: (match: M, seqWidth: number, prefix: string) => string[],
+        noun: string,
+      ): Promise<CommandOutcome> => {
         const contexts = computeContexts(db, result.groups, context);
         const outcome: CommandOutcome = {
           json: {
-            mode: "text",
+            mode,
             totalMatches: result.totalMatches,
             familyCollapsedMatches: result.familyCollapsedMatches,
-            matches: flattenGroups(result.groups, contexts, textMatchJson),
+            matches: flattenGroups(result.groups, contexts, matchJson),
             parameters,
             projection,
           },
-          human: renderGroups(result, params, contexts, renderTextMatch, "matches"),
+          human: renderGroups(result, params, contexts, renderMatch, noun),
         };
         return await addZeroResultAdvisories(ctx, result.totalMatches, outcome);
-      }
-      const result = searchFileTouches(db, params);
-      const contexts = computeContexts(db, result.groups, context);
-      const outcome: CommandOutcome = {
-        json: {
-          mode: "file_touches",
-          totalMatches: result.totalMatches,
-          familyCollapsedMatches: result.familyCollapsedMatches,
-          matches: flattenGroups(result.groups, contexts, fileTouchMatchJson),
-          parameters,
-          projection,
-        },
-        human: renderGroups(result, params, contexts, renderFileTouchMatch, "file touches"),
       };
-      return await addZeroResultAdvisories(ctx, result.totalMatches, outcome);
+      if (params.query !== null) {
+        return await finish(
+          "text",
+          searchText(db, params),
+          textMatchJson,
+          renderTextMatch,
+          "matches",
+        );
+      }
+      return await finish(
+        "file_touches",
+        searchFileTouches(db, params),
+        fileTouchMatchJson,
+        renderFileTouchMatch,
+        "file touches",
+      );
     } finally {
       db.close();
     }
@@ -483,7 +490,7 @@ function renderGroups<M extends { eventSeq: number; runLastSeq: number }>(
     );
     // With context, matches carry a `»` mark so context lines read as
     // context; without it, output keeps its exact unprefixed shape.
-    const matchPrefix = contextEvents.length > 0 || groupContext ? "» " : "  ";
+    const matchPrefix = groupContext !== undefined ? "» " : "  ";
     const entries: { seq: number; render: () => string[] }[] = [];
     for (const match of group.matches) {
       entries.push({

@@ -1,5 +1,6 @@
 import type { CommandOutcome } from "../../core/output/result.ts";
 import type { CommandRunContext } from "../../core/session-module.ts";
+import { asObject } from "../adapters/jsonl.ts";
 import {
   renderWithheldBanner,
   storedWithheldAdvisory,
@@ -7,12 +8,6 @@ import {
 } from "../domain/advisories.ts";
 
 type WithheldAdvisory = Extract<SessionAdvisory, { kind: "withheld" }>;
-
-function asObject(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 /** Adds cheap, persisted withheld facts without running Harness discovery. */
 export async function readSessionOpeningAdvisory(

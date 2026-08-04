@@ -103,43 +103,47 @@ function formatted(value: unknown, indent: string, multiline: boolean): string {
   return multiline ? json.replaceAll("\n", `\n${indent}`) : json;
 }
 
+function insertBeforeClose(
+  text: string,
+  range: ValueRange,
+  hasMembers: boolean,
+  renderItem: (indent: string, multiline: boolean) => string,
+): string {
+  const close = range.end - 1;
+  const trailing = trailingWhitespaceStart(text, close, range.start);
+  const multiline = text.slice(range.start, range.end).includes("\n");
+  if (!multiline) {
+    const insertion = `${hasMembers ? "," : ""}${renderItem("", false)}`;
+    return text.slice(0, close) + insertion + text.slice(close);
+  }
+  const closingIndent = lineIndent(text, close);
+  const itemIndent = `${closingIndent}  `;
+  const insertion = `${hasMembers ? "," : ""}\n${itemIndent}${renderItem(itemIndent, true)}\n${closingIndent}`;
+  return text.slice(0, trailing) + insertion + text.slice(close);
+}
+
 export function insertObjectProperty(
   text: string,
   object: ValueRange,
   name: string,
   value: unknown,
 ): string {
-  const properties = objectProperties(text, object);
-  const close = object.end - 1;
-  const trailing = trailingWhitespaceStart(text, close, object.start);
-  const multiline = text.slice(object.start, object.end).includes("\n");
-  if (!multiline) {
-    const insertion = `${properties.length > 0 ? "," : ""}${JSON.stringify(name)}:${formatted(value, "", false)}`;
-    return text.slice(0, close) + insertion + text.slice(close);
-  }
-  const closingIndent = lineIndent(text, close);
-  const propertyIndent = `${closingIndent}  `;
-  const insertion =
-    `${properties.length > 0 ? "," : ""}\n${propertyIndent}${JSON.stringify(name)}: ` +
-    `${formatted(value, propertyIndent, true)}\n${closingIndent}`;
-  return text.slice(0, trailing) + insertion + text.slice(close);
+  return insertBeforeClose(
+    text,
+    object,
+    objectProperties(text, object).length > 0,
+    (indent, multiline) =>
+      `${JSON.stringify(name)}${multiline ? ": " : ":"}${formatted(value, indent, multiline)}`,
+  );
 }
 
 export function insertArrayElement(text: string, array: ValueRange, value: unknown): string {
-  const elements = arrayElements(text, array);
-  const close = array.end - 1;
-  const trailing = trailingWhitespaceStart(text, close, array.start);
-  const multiline = text.slice(array.start, array.end).includes("\n");
-  if (!multiline) {
-    const insertion = `${elements.length > 0 ? "," : ""}${formatted(value, "", false)}`;
-    return text.slice(0, close) + insertion + text.slice(close);
-  }
-  const closingIndent = lineIndent(text, close);
-  const elementIndent = `${closingIndent}  `;
-  const insertion =
-    `${elements.length > 0 ? "," : ""}\n${elementIndent}` +
-    `${formatted(value, elementIndent, true)}\n${closingIndent}`;
-  return text.slice(0, trailing) + insertion + text.slice(close);
+  return insertBeforeClose(
+    text,
+    array,
+    arrayElements(text, array).length > 0,
+    (indent, multiline) => formatted(value, indent, multiline),
+  );
 }
 
 export function replaceValue(text: string, range: ValueRange, value: unknown): string {

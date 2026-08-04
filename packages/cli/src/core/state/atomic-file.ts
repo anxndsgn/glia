@@ -1,5 +1,15 @@
-import { chmod, mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+
+/** Read a file's text, with absence as null rather than ENOENT. */
+export async function readFileIfPresent(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
 
 /** Write a complete machine-local state file without exposing a partial value. */
 export async function writeFileAtomic(path: string, content: string): Promise<void> {

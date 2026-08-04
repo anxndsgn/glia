@@ -101,6 +101,7 @@ export const codexAdapter: SessionHarnessAdapter = {
   async *project(bundle: StoredSourceBundle): AsyncIterable<NormalizedEvent> {
     const lines = await readJsonlLines(join(bundle.dir, TRANSCRIPT_BUNDLE_PATH));
     const authoredUserMessages = sourceAuthoredUserMessages(lines);
+    const authoredIndex = authoredMessageIndex(authoredUserMessages);
     const meta = lines.find((line) => line.value?.["type"] === "session_meta")?.value;
     const subagentSession = isSubagentSession(meta ? asObject(meta["payload"]) : null);
     for (const line of lines) {
@@ -130,7 +131,7 @@ export const codexAdapter: SessionHarnessAdapter = {
           userMessage !== null &&
           (subagentSession ||
             (authoredUserMessages.length > 0
-              ? !isMirroredAuthoredUserMessage(userMessage, authoredUserMessages)
+              ? !isMirroredAuthoredUserMessage(userMessage, authoredIndex)
               : isInjectedPreamble(userMessage.text)));
         yield { ...base, ...projectResponseItem(payload, harnessInjected), timestamp };
         continue;
@@ -242,21 +243,43 @@ function responseItemUserMessage(
   return text === null ? null : { timestamp, text };
 }
 
+interface AuthoredMessageTimes {
+  /** Parsed timestamps of same-text authored copies; unparseable ones drop. */
+  times: number[];
+  /** An authored copy without a timestamp matches at any time. */
+  untimed: boolean;
+}
+
+/** Authored messages indexed by text so mirror checks avoid an O(U²) scan. */
+function authoredMessageIndex(
+  authored: SourceAuthoredUserMessage[],
+): Map<string, AuthoredMessageTimes> {
+  const index = new Map<string, AuthoredMessageTimes>();
+  for (const message of authored) {
+    let entry = index.get(message.text);
+    if (entry === undefined) index.set(message.text, (entry = { times: [], untimed: false }));
+    if (message.timestamp === null) {
+      entry.untimed = true;
+      continue;
+    }
+    const time = Date.parse(message.timestamp);
+    if (Number.isFinite(time)) entry.times.push(time);
+  }
+  return index;
+}
+
 function isMirroredAuthoredUserMessage(
   responseItem: SourceAuthoredUserMessage,
-  authored: SourceAuthoredUserMessage[],
+  authored: Map<string, AuthoredMessageTimes>,
 ): boolean {
-  return authored.some((eventMessage) => {
-    if (eventMessage.text !== responseItem.text) return false;
-    if (eventMessage.timestamp === null || responseItem.timestamp === null) return true;
-    const eventTime = Date.parse(eventMessage.timestamp);
-    const responseTime = Date.parse(responseItem.timestamp);
-    return (
-      Number.isFinite(eventTime) &&
-      Number.isFinite(responseTime) &&
-      Math.abs(eventTime - responseTime) <= 1_000
-    );
-  });
+  const entry = authored.get(responseItem.text);
+  if (entry === undefined) return false;
+  if (entry.untimed || responseItem.timestamp === null) return true;
+  const responseTime = Date.parse(responseItem.timestamp);
+  return (
+    Number.isFinite(responseTime) &&
+    entry.times.some((time) => Math.abs(time - responseTime) <= 1_000)
+  );
 }
 
 function projectResponseItem(

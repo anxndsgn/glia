@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { hookLivenessFile } from "../project/paths.ts";
 import type { LoadedProject } from "../session-module.ts";
-import { writeFileAtomic, writeJsonAtomic } from "../state/atomic-file.ts";
+import { readFileIfPresent, writeFileAtomic, writeJsonAtomic } from "../state/atomic-file.ts";
 import { WriterLease } from "../store/lease.ts";
 
 const HOOK_LOG_MAX_BYTES = 64 * 1024;
@@ -20,15 +20,6 @@ export interface HookRunReport {
   finishedAt: string;
   outcome: "success" | "busy" | "error";
   summary: Record<string, unknown>;
-}
-
-async function readText(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
 }
 
 export async function touchHookLiveness(
@@ -76,7 +67,7 @@ export async function readHookLiveness(home: string): Promise<HookLiveness | nul
 }
 
 export async function readHookRunReport(project: LoadedProject): Promise<HookRunReport | null> {
-  const text = await readText(project.paths.hookReportFile);
+  const text = await readFileIfPresent(project.paths.hookReportFile);
   if (text === null) return null;
   const raw = JSON.parse(text) as Partial<HookRunReport>;
   if (
@@ -103,7 +94,7 @@ export async function recordHookRun(project: LoadedProject, report: HookRunRepor
     if (latest === null || compareReports(report, latest) >= 0) {
       await writeJsonAtomic(project.paths.hookReportFile, report);
     }
-    const previous = (await readText(project.paths.hookLogFile)) ?? "";
+    const previous = (await readFileIfPresent(project.paths.hookLogFile)) ?? "";
     const pruned = Array.isArray(report.summary["prunedWithheld"])
       ? (report.summary["prunedWithheld"] as Record<string, unknown>[])
       : [];

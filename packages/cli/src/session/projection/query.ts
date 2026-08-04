@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { GliaError } from "../../core/output/errors.ts";
 import { renderExcerpt } from "./excerpt.ts";
-import { termOccurrences } from "./term-match.ts";
+import { foldCase, termOccurrences } from "./term-match.ts";
 import {
   chooseAnchor,
   compareByTimestampThenId,
@@ -15,7 +15,6 @@ import {
 } from "./family.ts";
 import type { ArchiveState } from "../domain/archive.ts";
 import type { SessionLabelSource } from "../adapters/label.ts";
-import { SUBAGENT_BUNDLE_PREFIX } from "../adapters/subagent.ts";
 import { createProjectionSchema, EMPTY_PROJECTION_PATH } from "./schema.ts";
 
 export interface SessionRow extends SubagentColumns {
@@ -714,7 +713,8 @@ export function searchText(db: Database, params: SearchParams): SearchResult<Tex
   let rows = db.query(uncappedQuery(matchedCte)).all(bind as never) as TextMatchRow[];
   if (params.word) {
     rows = rows.flatMap((row) => {
-      const counts = terms.map((term) => termOccurrences(row.text, term, true).length);
+      const folded = foldCase(row.text);
+      const counts = terms.map((term) => termOccurrences(row.text, term, true, folded).length);
       if (counts.includes(0)) return [];
       return ranked ? [{ ...row, rank: -counts.reduce((a, b) => a + b, 0) }] : [row];
     });

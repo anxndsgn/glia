@@ -1,3 +1,4 @@
+import { oneLine, truncate } from "../../core/output/terminal.ts";
 import type { FamilyHint } from "../domain/family-hint.ts";
 
 /** The Fork Family note of the collection surfaces; null outside any visible family. */
@@ -41,6 +42,5 @@ export function familyHintText(hint: FamilyHint): string {
 }
 
 function truncateLabel(label: string): string {
-  const flat = label.replaceAll("\n", " ").trim();
-  return flat.length <= 40 ? flat : `${flat.slice(0, 39)}…`;
+  return truncate(oneLine(label), 40);
 }

@@ -1,10 +1,11 @@
-import { lstat, mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { CLI_VERSION } from "../build-info.ts";
+import { readFileIfPresent } from "../state/atomic-file.ts";
 import { confirmProceed } from "../output/confirm.ts";
 import { GliaError } from "../output/errors.ts";
 import type { CommandOutcome } from "../output/result.ts";
-import { resolveWorktreeTopLevel } from "../project/resolve.ts";
+import { resolveWorktreeTopLevel, worktreeTopLevelOrNull } from "../project/resolve.ts";
 import { isManagedSkillContent, renderSkillContent, SKILL_NAME } from "../skill/content.ts";
 import {
   ALL_HARNESSES,
@@ -63,15 +64,6 @@ function skillFile(destination: SkillDestination): string {
   return join(destination.skillsDir, SKILL_NAME, "SKILL.md");
 }
 
-async function readIfExists(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
 /** A symlinked destination would redirect the write outside the chosen
  * directory (worse under --force / --no-input, where nothing confirms);
  * refuse it instead of following it. Absence is fine. */
@@ -83,14 +75,6 @@ async function assertNoSymlink(path: string): Promise<void> {
   } catch (error) {
     if (error instanceof GliaError) throw error;
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-}
-
-async function tryWorktree(cwd: string): Promise<string | null> {
-  try {
-    return await resolveWorktreeTopLevel(cwd);
-  } catch {
-    return null;
   }
 }
 
@@ -166,15 +150,14 @@ async function defaultPrompts(): Promise<SkillPrompts> {
 }
 
 /**
- * The scope × harness matrix, resolved from flags when any are given,
- * from the two-step prompt on a terminal, and from the defaults —
- * global × both harnesses — when input is disabled. `--target` is an
- * additive escape hatch naming a skills directory outright.
+ * Destinations the flags name outright — the scope × harness matrix plus
+ * the `--target` escape hatch — or null when no flag was given and the
+ * verb decides interactively.
  */
-async function installDestinations(
+async function flaggedDestinations(
   ctx: SkillCommandContext,
   flags: SkillTargetFlags,
-): Promise<SkillDestination[]> {
+): Promise<SkillDestination[] | null> {
   const custom = flags.target === null ? [] : [targetDestination(ctx.cwd, flags.target)];
   if (anyMatrixFlag(flags)) {
     const scopes = scopesFrom(flags);
@@ -184,7 +167,20 @@ async function installDestinations(
       ...custom,
     ]);
   }
-  if (custom.length > 0) return custom;
+  return custom.length > 0 ? custom : null;
+}
+
+/**
+ * The scope × harness matrix, resolved from flags when any are given,
+ * from the two-step prompt on a terminal, and from the defaults —
+ * global × both harnesses — when input is disabled.
+ */
+async function installDestinations(
+  ctx: SkillCommandContext,
+  flags: SkillTargetFlags,
+): Promise<SkillDestination[]> {
+  const flagged = await flaggedDestinations(ctx, flags);
+  if (flagged !== null) return flagged;
   if (ctx.inputDisabled) {
     return matrixDestinations(["global"], ALL_HARNESSES, ctx.homeDir, null);
   }
@@ -205,7 +201,7 @@ export async function runSkillInstall(
   const content = renderSkillContent(CLI_VERSION);
   const plans: { destination: SkillDestination; status: InstallStatus }[] = [];
   for (const destination of destinations) {
-    const existing = await readIfExists(skillFile(destination));
+    const existing = await readFileIfPresent(skillFile(destination));
     const status: InstallStatus =
       existing === null ? "created" : existing === content ? "up_to_date" : "updated";
     plans.push({ destination, status });
@@ -250,7 +246,7 @@ type InstallState = "managed" | "foreign" | "absent";
 /** What sits at the destination: a glia-written SKILL.md, someone else's
  * skill that merely shares the name, or nothing. */
 async function installState(destination: SkillDestination): Promise<InstallState> {
-  const content = await readIfExists(skillFile(destination));
+  const content = await readFileIfPresent(skillFile(destination));
   if (content === null) return "absent";
   return isManagedSkillContent(content) ? "managed" : "foreign";
 }
@@ -259,21 +255,19 @@ export async function runSkillRemove(
   ctx: SkillCommandContext,
   flags: SkillTargetFlags,
 ): Promise<CommandOutcome> {
-  const custom = flags.target === null ? [] : [targetDestination(ctx.cwd, flags.target)];
+  const flagged = await flaggedDestinations(ctx, flags);
   let selected: SkillDestination[];
-  if (anyMatrixFlag(flags)) {
-    const scopes = scopesFrom(flags);
-    const worktree = scopes.includes("project") ? await resolveWorktreeTopLevel(ctx.cwd) : null;
-    selected = dedupeDestinations([
-      ...matrixDestinations(scopes, harnessesFrom(flags), ctx.homeDir, worktree),
-      ...custom,
-    ]);
-  } else if (custom.length > 0) {
-    selected = custom;
+  if (flagged !== null) {
+    selected = flagged;
   } else {
     // No flags: offer exactly what is installed across the known matrix.
     const candidates = dedupeDestinations(
-      matrixDestinations(ALL_SCOPES, ALL_HARNESSES, ctx.homeDir, await tryWorktree(ctx.cwd)),
+      matrixDestinations(
+        ALL_SCOPES,
+        ALL_HARNESSES,
+        ctx.homeDir,
+        await worktreeTopLevelOrNull(ctx.cwd),
+      ),
     );
     const detected: SkillDestination[] = [];
     for (const candidate of candidates) {

@@ -10,12 +10,11 @@ import {
   renderDiscoveryAdvisories,
   type SessionAdvisory,
 } from "../domain/advisories.ts";
+import { asObject as asObjectOrNull } from "../adapters/jsonl.ts";
 import { discoverCandidates } from "../domain/discover.ts";
 
 function asObject(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : { value };
+  return asObjectOrNull(value) ?? { value };
 }
 
 export function notEnrolledError(project: LoadedProject): GliaError {

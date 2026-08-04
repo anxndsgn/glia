@@ -5,6 +5,14 @@ import { STORE_MARKER_FILE, storeMarkerBytes } from "./marker.ts";
 
 export const COMMIT_IDENTITY = ["-c", "user.name=glia", "-c", "user.email=glia@local"];
 
+/** The same fixed identity, for Git plumbing that reads the environment. */
+export const COMMIT_IDENTITY_ENV = {
+  GIT_AUTHOR_NAME: "glia",
+  GIT_AUTHOR_EMAIL: "glia@local",
+  GIT_COMMITTER_NAME: "glia",
+  GIT_COMMITTER_EMAIL: "glia@local",
+};
+
 /**
  * The authoritative Git-backed Store Replica. Git is an internal mechanism;
  * the working-tree layout is private implementation detail.

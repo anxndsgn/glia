@@ -8,7 +8,7 @@ import type {
   StoreUnitConflict,
 } from "../core/session-module.ts";
 import { ProjectStore } from "../core/store/store.ts";
-import { listSessionIds } from "./storage/store-layout.ts";
+import { listSessionIds, SESSIONS_PREFIX } from "./storage/store-layout.ts";
 import {
   buildAndPublishLocked,
   pointerIsCurrent,
@@ -47,8 +47,6 @@ import { countArchivedSessions, mergeArchiveUnit, SESSION_ARCHIVE_DIR } from "./
 import { advisoriesForDiscovery } from "./domain/advisories.ts";
 import { readWithheldLosses } from "./domain/withheld-loss.ts";
 import { readHookLiveness, readHookRunReport } from "../core/hooks/run-state.ts";
-
-const SESSIONS_PREFIX = "session/sessions/";
 
 export interface SessionConfig {
   /** The secret-detection gate; enabled unless the declaration turns it off. */

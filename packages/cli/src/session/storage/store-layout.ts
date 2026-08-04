@@ -3,6 +3,7 @@ import { cp, mkdir, readdir, rm } from "node:fs/promises";
 import type { BundleManifest, StoredSourceBundle, SubagentOrigin } from "../adapters/types.ts";
 import type { HarnessId } from "../../core/harnesses/ids.ts";
 import { GliaError } from "../../core/output/errors.ts";
+import { readFileIfPresent } from "../../core/state/atomic-file.ts";
 import { requireSupportedSchemaVersion } from "../../core/state/schema-version.ts";
 import { gitOrThrow } from "../../core/store/git.ts";
 
@@ -72,6 +73,14 @@ export interface SessionMeta {
   };
 }
 
+/** The Session units' repo-relative prefix inside the Store worktree. */
+export const SESSIONS_PREFIX = "session/sessions/";
+
+/** One Session unit's repo-relative path inside the Store worktree. */
+export function sessionUnitPath(sessionId: string): string {
+  return `${SESSIONS_PREFIX}${sessionId}`;
+}
+
 export function sessionsDir(storeDir: string): string {
   return join(storeDir, "session", "sessions");
 }
@@ -110,27 +119,12 @@ export async function countSessionsAtHead(storeDir: string): Promise<number> {
   return sessionIds.size;
 }
 
-/**
- * The file's text, or null when it does not exist — one read rather than
- * an existence probe followed by a second syscall to read it. Session
- * metadata and bundle manifests are read once per Session on every
- * projection rebuild, so the probe is pure overhead at that scale.
- */
-async function readTextIfPresent(path: string): Promise<string | null> {
-  try {
-    return await Bun.file(path).text();
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw err;
-  }
-}
-
 export async function readSessionMeta(
   storeDir: string,
   sessionId: string,
 ): Promise<SessionMeta | null> {
   const path = join(sessionDir(storeDir, sessionId), "session.json");
-  const text = await readTextIfPresent(path);
+  const text = await readFileIfPresent(path);
   if (text === null) return null;
   const meta = JSON.parse(text) as SessionMeta;
   requireSupportedSchemaVersion(
@@ -148,7 +142,7 @@ export async function readStoredBundle(
 ): Promise<StoredSourceBundle> {
   const dir = bundleDir(storeDir, sessionId);
   const manifestPath = join(dir, "manifest.json");
-  const text = await readTextIfPresent(manifestPath);
+  const text = await readFileIfPresent(manifestPath);
   if (text === null) {
     throw new GliaError("NOT_FOUND", `session ${sessionId} has no stored bundle`, { sessionId });
   }

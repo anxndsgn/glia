@@ -1,5 +1,4 @@
-import { dirname } from "node:path";
-import { mkdir } from "node:fs/promises";
+import { writeJsonAtomic } from "../state/atomic-file.ts";
 import { requireSupportedSchemaVersion } from "../state/schema-version.ts";
 
 export const SYNC_STATE_SCHEMA_VERSION = 1;
@@ -62,18 +61,5 @@ export async function readSyncState(syncStateFile: string): Promise<SyncState | 
 }
 
 export async function writeSyncState(syncStateFile: string, state: SyncState): Promise<void> {
-  await mkdir(dirname(syncStateFile), { recursive: true });
-  await Bun.write(syncStateFile, JSON.stringify(state, null, 2) + "\n");
-}
-
-/** Sessions a successful inward remote contact without claiming `glia sync` ran. */
-export async function writeFetchState(syncStateFile: string, lastFetchAt: string): Promise<void> {
-  const previous = await readSyncState(syncStateFile);
-  await writeSyncState(syncStateFile, {
-    schemaVersion: SYNC_STATE_SCHEMA_VERSION,
-    lastFetchAt,
-    lastSyncAt: previous?.lastSyncAt ?? null,
-    outcome: previous?.outcome ?? null,
-    head: previous?.head ?? null,
-  });
+  await writeJsonAtomic(syncStateFile, state);
 }

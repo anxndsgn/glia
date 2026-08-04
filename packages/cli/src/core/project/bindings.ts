@@ -125,6 +125,7 @@ export class BindingIndex {
   readonly #home: string;
   readonly #overlay: { worktree: string; projectId: string } | null;
   readonly #byFile = new Map<string, Bindings | null>();
+  readonly #resolutions = new Map<string, OpeningPathResolution>();
   #projectIds: string[] | null = null;
 
   constructor(home: string, overlay: BindingOverlay | null = null) {
@@ -188,6 +189,16 @@ export class BindingIndex {
    * root has not opted in and must not be inherited by its parent Project.
    */
   async resolveOpeningPath(openingPath: string): Promise<OpeningPathResolution> {
+    // Many candidates share an Opening Path; the worktree climb below spawns
+    // git, so one resolution per path per index.
+    const cached = this.#resolutions.get(openingPath);
+    if (cached !== undefined) return cached;
+    const resolution = await this.#resolveOpeningPath(openingPath);
+    this.#resolutions.set(openingPath, resolution);
+    return resolution;
+  }
+
+  async #resolveOpeningPath(openingPath: string): Promise<OpeningPathResolution> {
     let probe = openingPath;
     let missing = false;
     for (;;) {
@@ -240,14 +251,6 @@ export class BindingIndex {
     }
     return owner;
   }
-}
-
-/** One-shot {@link BindingIndex.mapPath} for a single Opening Path. */
-export async function mapPathToProject(
-  home: string,
-  openingPath: string,
-): Promise<PathMapping | null> {
-  return await new BindingIndex(home).mapPath(openingPath);
 }
 
 export async function mapWorktreeToProject(
