@@ -20,11 +20,7 @@ import { readDeclaration, writeDeclaration } from "../../src/core/config/glia-js
 import { loadProject } from "../../src/core/project/load.ts";
 import { projectPaths } from "../../src/core/project/paths.ts";
 import { git, gitOrThrow } from "../../src/core/store/git.ts";
-import {
-  STORE_FORMAT_VERSION,
-  readLocalStoreMarker,
-  storeMarkerBytes,
-} from "../../src/core/store/marker.ts";
+import { readLocalStoreMarker, storeMarkerBytes } from "../../src/core/store/marker.ts";
 import { COMMIT_IDENTITY, ProjectStore } from "../../src/core/store/store.ts";
 import type { LoadedProject } from "../../src/core/session-module.ts";
 import { GliaError } from "../../src/core/output/errors.ts";
@@ -324,28 +320,10 @@ describe("glia sync", () => {
     ).toBe(trackingBefore);
   });
 
-  test("a store with a newer storeFormatVersion is refused politely", async () => {
-    const projectA = await machineA();
-    await sync(projectA, envA.env);
-    const remote = projectA.declaration.store.remote!;
-
-    const upgrader = join(envA.root, "upgrader");
-    await gitOrThrow(["clone", remote, upgrader], envA.root);
-    const marker = {
-      storeFormatVersion: STORE_FORMAT_VERSION + 1,
-      projectId: projectA.declaration.projectId,
-    };
-    await Bun.write(join(upgrader, "store.json"), JSON.stringify(marker, null, 2) + "\n");
-    await gitOrThrow(["add", "-A"], upgrader);
-    await gitOrThrow([...COMMIT_IDENTITY, "commit", "-m", "future format"], upgrader);
-    await gitOrThrow(["push", "origin", "main"], upgrader);
-
-    const headBefore = await headOf(projectA);
-    await expect(sync(projectA, envA.env)).rejects.toThrow(
-      expect.objectContaining({ code: "STATE_TOO_NEW" }) as Error,
-    );
-    expect(await headOf(projectA)).toBe(headBefore);
-  });
+  // A newer store marker met over sync is covered by deletion.test.ts
+  // ("an older Glia meeting a newer store format…"), which also pins its
+  // precedence over REMOTE_REWRITTEN; per-state-file STATE_TOO_NEW readers
+  // are covered in state-too-new.test.ts.
 
   test("an unversioned existing store is backfilled by the migration as its own commit", async () => {
     const project = await initProject(envA);

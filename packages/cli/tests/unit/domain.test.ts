@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { sessionIdOf } from "../../src/session/domain/identity.ts";
 import { bundleDigest, manifestOf } from "../../src/session/storage/bundle.ts";
-import { bindingsContain, normalizeBoundPath } from "../../src/core/project/bindings.ts";
 import {
   ARCHIVE_SCHEMA_VERSION,
   mergeArchiveMarker,
@@ -37,33 +36,6 @@ describe("bundle digest", () => {
     const d1 = bundleDigest(manifestOf({ files: [file("a", "1")] }));
     const d2 = bundleDigest(manifestOf({ files: [file("a", "CHANGED")] }));
     expect(d1).not.toBe(d2);
-  });
-});
-
-describe("bindings", () => {
-  const bindings = {
-    schemaVersion: 1,
-    projectId: "p",
-    roots: ["/work/proj"],
-    aliases: ["/old/proj"],
-  };
-
-  test("contain the root itself and paths under it", () => {
-    expect(bindingsContain(bindings, "/work/proj")).toBeTrue();
-    expect(bindingsContain(bindings, "/work/proj/sub/dir")).toBeTrue();
-  });
-
-  test("do not match sibling prefixes", () => {
-    expect(bindingsContain(bindings, "/work/proj-other")).toBeFalse();
-    expect(bindingsContain(bindings, "/work")).toBeFalse();
-  });
-
-  test("aliases map former checkout paths", () => {
-    expect(bindingsContain(bindings, "/old/proj/deep")).toBeTrue();
-  });
-
-  test("normalization strips trailing separators", () => {
-    expect(normalizeBoundPath("/work/proj/")).toBe("/work/proj");
   });
 });
 

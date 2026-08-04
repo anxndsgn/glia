@@ -12,7 +12,7 @@ import {
 } from "../../src/core/hooks/run-state.ts";
 import { WriterLease } from "../../src/core/store/lease.ts";
 import { ProjectStore } from "../../src/core/store/store.ts";
-import { runHookInvocation, spawnDetachedHook } from "../../src/session/commands/hook-import.ts";
+import { runHookInvocation } from "../../src/session/commands/hook-import.ts";
 import { searchCommand } from "../../src/session/commands/search.ts";
 import {
   decorateSessionOutcome,
@@ -55,6 +55,32 @@ afterEach(async () => {
 
 function foregroundEnv(overrides: Record<string, string | undefined> = {}) {
   return { ...env.env, GLIA_HOOK_FOREGROUND: "1", ...overrides };
+}
+
+function importAll(target: LoadedProject = project) {
+  return runImport(target, env.env, { harness: null, dryRun: false, onlyCandidateIds: null });
+}
+
+/** Starts a full import against the parent Project while its writer lease is
+ *  held, applies `mutate` during the wait, then releases and returns the
+ *  report. Exercises the re-check-after-lease path in one place. */
+async function withHeldLease(
+  mutate: () => Promise<void>,
+  options: { harness?: Parameters<typeof runImport>[2]["harness"] } = {},
+) {
+  const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
+  const importing = runImport(
+    project,
+    { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
+    { harness: options.harness ?? null, dryRun: false, onlyCandidateIds: null },
+  );
+  try {
+    await Bun.sleep(50);
+    await mutate();
+  } finally {
+    lease.release();
+  }
+  return await importing;
 }
 
 function pauseNextProjectWriterAcquire(): {
@@ -143,11 +169,7 @@ describe("hook-mode import", () => {
     expect(await readdir(join(env.home, "projects"))).toEqual(projectsBefore);
 
     const childProject = await initProject(env, nested);
-    const childReport = await runImport(childProject, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const childReport = await importAll(childProject);
     expect(childReport.accepted).toHaveLength(1);
     expect(await listSessionIds(project.paths.storeDir)).toEqual([]);
     expect(await listSessionIds(childProject.paths.storeDir)).toHaveLength(1);
@@ -160,11 +182,7 @@ describe("hook-mode import", () => {
     await writeClaudeSession(env.claudeHome, { sessionId: "live-cwd", cwd: env.worktree });
     await rm(removed, { recursive: true, force: true });
 
-    const report = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const report = await importAll();
 
     expect(report.adapterFailures).toEqual([]);
     expect(report.accepted).toHaveLength(1);
@@ -172,7 +190,9 @@ describe("hook-mode import", () => {
     expect(await listSessionIds(project.paths.storeDir)).toHaveLength(1);
   });
 
-  test("a vanished leaf stays pending until explicitly associated", async () => {
+  test("vanished nested sources stay pending until explicitly associated", async () => {
+    // Two vanished flavors: a removed leaf inside a surviving never-bound
+    // repository, and a never-bound nested repository removed entirely.
     const nested = join(env.worktree, "vendor", "surviving-independent");
     const removedLeaf = join(nested, "packages", "removed-app");
     await mkdir(removedLeaf, { recursive: true });
@@ -183,23 +203,28 @@ describe("hook-mode import", () => {
       cwd: removedLeaf,
     });
     await rm(removedLeaf, { recursive: true, force: true });
-
-    const parentReport = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
+    const vanished = join(env.worktree, "vendor", "vanished-never-bound");
+    const openingPath = join(vanished, "packages", "app");
+    await mkdir(openingPath, { recursive: true });
+    const vanishedGit = Bun.spawn(["git", "init", "-q", "--initial-branch=main", vanished]);
+    expect(await vanishedGit.exited).toBe(0);
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "vanished-never-bound",
+      cwd: openingPath,
     });
+    await rm(vanished, { recursive: true, force: true });
+
+    const parentReport = await importAll();
     expect(parentReport.accepted).toEqual([]);
-    expect(parentReport.pending).toHaveLength(1);
+    expect(parentReport.pending).toHaveLength(2);
+    expect(await listSessionIds(project.paths.storeDir)).toEqual([]);
 
+    // Vanished Opening Paths resolve to no live worktree, so both stay
+    // pending in the child too until explicitly associated.
     const childProject = await initProject(env, nested);
-    const childReport = await runImport(childProject, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const childReport = await importAll(childProject);
     expect(childReport.accepted).toEqual([]);
-    expect(childReport.pending).toHaveLength(1);
+    expect(childReport.pending).toHaveLength(2);
 
     const candidateId = sessionIdOf({
       harnessId: "claude-code",
@@ -215,29 +240,6 @@ describe("hook-mode import", () => {
     expect(await listSessionIds(childProject.paths.storeDir)).toHaveLength(1);
   });
 
-  test("a vanished never-bound nested repository stays pending in its parent", async () => {
-    const nested = join(env.worktree, "vendor", "vanished-never-bound");
-    const openingPath = join(nested, "packages", "app");
-    await mkdir(openingPath, { recursive: true });
-    const git = Bun.spawn(["git", "init", "-q", "--initial-branch=main", nested]);
-    expect(await git.exited).toBe(0);
-    await writeClaudeSession(env.claudeHome, {
-      sessionId: "vanished-never-bound",
-      cwd: openingPath,
-    });
-    await rm(nested, { recursive: true, force: true });
-
-    const report = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
-
-    expect(report.accepted).toEqual([]);
-    expect(report.pending).toHaveLength(1);
-    expect(await listSessionIds(project.paths.storeDir)).toEqual([]);
-  });
-
   test("a vanished bound child root remains owned by its child Project", async () => {
     const nested = join(env.worktree, "vendor", "former-child");
     const openingPath = join(nested, "packages", "app");
@@ -251,16 +253,8 @@ describe("hook-mode import", () => {
     });
     await rm(nested, { recursive: true, force: true });
 
-    const parentReport = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
-    const childReport = await runImport(childProject, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const parentReport = await importAll();
+    const childReport = await importAll(childProject);
 
     expect(parentReport.accepted).toEqual([]);
     expect(parentReport.outOfScope).toBe(1);
@@ -282,16 +276,8 @@ describe("hook-mode import", () => {
       cwd: nested,
     });
 
-    const parentReport = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
-    const childReport = await runImport(childProject, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const parentReport = await importAll();
+    const childReport = await importAll(childProject);
 
     expect(parentReport.accepted).toHaveLength(1);
     expect(childReport.accepted).toEqual([]);
@@ -321,20 +307,16 @@ describe("hook-mode import", () => {
         { yes: true },
       ),
     ).rejects.toMatchObject({ code: "ASSOCIATION_CONFLICT" });
-    const childReport = await runImport(childProject, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const childReport = await importAll(childProject);
     expect(childReport.accepted).toHaveLength(1);
     expect(await listSessionIds(project.paths.storeDir)).toEqual([]);
     expect(await listSessionIds(childProject.paths.storeDir)).toHaveLength(1);
   });
 
-  test("a live child Binding overrides a stale parent association at lease time", async () => {
-    const nested = join(env.worktree, "vendor", "associated-before-child");
+  test("a bound nested worktree is owned by its most-specific Project despite a stale parent association", async () => {
+    const nested = join(env.worktree, "vendor", "owned-child");
     await mkdir(nested, { recursive: true });
-    const sourceSessionId = "associated-before-child-binding";
+    const sourceSessionId = "nested-owned";
     await writeClaudeSession(env.claudeHome, { sessionId: sourceSessionId, cwd: nested });
     const candidateId = sessionIdOf({ harnessId: "claude-code", sourceSessionId });
     const associated = await readDiscoveryState(project.paths.discoveryFile);
@@ -344,16 +326,8 @@ describe("hook-mode import", () => {
     const git = Bun.spawn(["git", "init", "-q", "--initial-branch=main", nested]);
     expect(await git.exited).toBe(0);
     const childProject = await initProject(env, nested);
-    const parentReport = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
-    const childReport = await runImport(childProject, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const parentReport = await importAll();
+    const childReport = await importAll(childProject);
 
     expect(parentReport.accepted).toEqual([]);
     expect(parentReport.outOfScope).toBe(1);
@@ -362,66 +336,7 @@ describe("hook-mode import", () => {
     expect(await listSessionIds(childProject.paths.storeDir)).toHaveLength(1);
   });
 
-  test("a bound nested worktree is owned only by its most-specific Project", async () => {
-    const nested = join(env.worktree, "vendor", "owned-child");
-    await mkdir(nested, { recursive: true });
-    const git = Bun.spawn(["git", "init", "-q", "--initial-branch=main", nested]);
-    expect(await git.exited).toBe(0);
-    const childProject = await initProject(env, nested);
-    await writeClaudeSession(env.claudeHome, { sessionId: "nested-owned", cwd: nested });
-
-    const parentReport = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
-    const childReport = await runImport(childProject, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
-
-    expect(parentReport.accepted).toHaveLength(0);
-    expect(parentReport.outOfScope).toBe(1);
-    expect(await listSessionIds(project.paths.storeDir)).toEqual([]);
-    expect(childReport.accepted).toHaveLength(1);
-    expect(await listSessionIds(childProject.paths.storeDir)).toHaveLength(1);
-  });
-
-  test("lease-time Binding refresh keeps a newly bound child out of its parent", async () => {
-    const nested = join(env.worktree, "vendor", "concurrent-child");
-    await mkdir(nested, { recursive: true });
-    const git = Bun.spawn(["git", "init", "-q", "--initial-branch=main", nested]);
-    expect(await git.exited).toBe(0);
-    await writeClaudeSession(env.claudeHome, { sessionId: "concurrent-owned", cwd: nested });
-
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const parentImport = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    let childProject!: LoadedProject;
-    try {
-      await Bun.sleep(50);
-      childProject = await initProject(env, nested);
-    } finally {
-      lease.release();
-    }
-
-    const parentReport = await parentImport;
-    const childReport = await runImport(childProject, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
-    expect(parentReport.accepted).toHaveLength(0);
-    expect(parentReport.outOfScope).toBe(1);
-    expect(await listSessionIds(project.paths.storeDir)).toEqual([]);
-    expect(childReport.accepted).toHaveLength(1);
-  });
-
-  test("lease-time Binding refresh keeps flagged debt only in a newly bound child", async () => {
+  test("lease-time Binding refresh keeps a newly bound child and its flagged debt out of the parent", async () => {
     const nested = join(env.worktree, "vendor", "concurrent-flagged-child");
     await mkdir(nested, { recursive: true });
     const git = Bun.spawn(["git", "init", "-q", "--initial-branch=main", nested]);
@@ -434,26 +349,13 @@ describe("hook-mode import", () => {
     });
     const candidateId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: sessionId });
 
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const parentImport = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
     let childProject!: LoadedProject;
-    try {
-      await Bun.sleep(50);
+    const parentReport = await withHeldLease(async () => {
       childProject = await initProject(env, nested);
-    } finally {
-      lease.release();
-    }
-
-    const parentReport = await parentImport;
-    const childReport = await runImport(childProject, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
     });
+    const childReport = await importAll(childProject);
+
+    expect(parentReport.accepted).toHaveLength(0);
     expect(parentReport.flagged).toEqual([]);
     expect(parentReport.outOfScope).toBe(1);
     expect(
@@ -461,6 +363,7 @@ describe("hook-mode import", () => {
     ).toBeUndefined();
     expect(parentReport.prunedWithheld).toEqual([]);
     expect(await readWithheldLosses(project.paths.withheldLossFile)).toEqual([]);
+    expect(await listSessionIds(project.paths.storeDir)).toEqual([]);
     expect(childReport.flagged).toHaveLength(1);
     expect(
       (await readDiscoveryState(childProject.paths.discoveryFile)).evaluations[candidateId],
@@ -472,21 +375,11 @@ describe("hook-mode import", () => {
     await writeClaudeSession(env.claudeHome, { sessionId, cwd: env.worktree });
     const candidateId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: sessionId });
 
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await Bun.sleep(50);
+    const report = await withHeldLease(async () => {
       const state = await readDiscoveryState(project.paths.discoveryFile);
       ignoreCandidate(state, candidateId);
       await writeDiscoveryState(project.paths.discoveryFile, state);
-    } finally {
-      lease.release();
-    }
-    const report = await importing;
+    });
 
     expect(report.accepted).toEqual([]);
     expect(report.ignored).toBe(1);
@@ -498,19 +391,9 @@ describe("hook-mode import", () => {
       sessionId: "staging-cleared-before-accept",
       cwd: env.worktree,
     });
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await Bun.sleep(50);
+    const report = await withHeldLease(async () => {
       await rm(project.paths.stagingRoot, { recursive: true, force: true });
-    } finally {
-      lease.release();
-    }
-    const report = await importing;
+    });
 
     expect(report.sourceErrors).toEqual([]);
     expect(report.accepted).toHaveLength(1);
@@ -582,12 +465,6 @@ describe("hook-mode import", () => {
     expect(await new ProjectStore(project.paths.storeDir).head()).toBe(first);
   });
 
-  test("an asynchronous detached-spawn failure is swallowed", async () => {
-    spawnDetachedHook(env.worktree, env.env, [join(env.root, "missing-glia")]);
-    await Bun.sleep(25);
-    expect(true).toBeTrue();
-  });
-
   test("a diagnostic report failure cannot reclassify a successful import", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "report-write-failure",
@@ -629,33 +506,21 @@ describe("withheld freshness state", () => {
       sourceSessionId: "hook-secret",
     });
 
-    const first = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const first = await importAll();
     expect(first.flagged).toHaveLength(1);
     const firstFlaggedAt = (await readDiscoveryState(project.paths.discoveryFile)).evaluations[
       candidateId
     ]!.firstFlaggedAt;
 
     await Bun.sleep(5);
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
     expect(
       (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId]!
         .firstFlaggedAt,
     ).toBe(firstFlaggedAt);
 
     await rm(source);
-    const pruned = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const pruned = await importAll();
     expect(pruned.prunedWithheld.map((record) => record.candidateId)).toEqual([candidateId]);
     expect(
       (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId],
@@ -681,11 +546,7 @@ describe("withheld freshness state", () => {
       harnessId: "claude-code",
       sourceSessionId: "narrow-secret",
     });
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
     await rm(source);
 
     await runImport(project, env.env, {
@@ -714,11 +575,7 @@ describe("withheld freshness state", () => {
     };
     await writeDiscoveryState(project.paths.discoveryFile, state);
 
-    const report = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const report = await importAll();
 
     expect(report.unavailableHarnesses.map((entry) => entry.harnessId)).toContain("codex");
     expect(
@@ -740,33 +597,19 @@ describe("withheld freshness state", () => {
         },
       ],
     });
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
     await rm(source);
     const oldId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "prune-race-old" });
     const newId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "prune-race-new" });
 
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await Bun.sleep(50);
+    const report = await withHeldLease(async () => {
       const concurrent = await readDiscoveryState(project.paths.discoveryFile);
       concurrent.evaluations[newId] = {
         ...concurrent.evaluations[oldId]!,
         identity: { harnessId: "claude-code", sourceSessionId: "prune-race-new" },
       };
       await writeDiscoveryState(project.paths.discoveryFile, concurrent);
-    } finally {
-      lease.release();
-    }
-    const report = await importing;
+    });
     const final = await readDiscoveryState(project.paths.discoveryFile);
     expect(report.prunedWithheld.map((record) => record.candidateId)).toEqual([oldId]);
     expect(final.evaluations[oldId]).toBeUndefined();
@@ -783,11 +626,7 @@ describe("withheld freshness state", () => {
       harnessId: "claude-code",
       sourceSessionId: "accepted-evaluation-residue",
     });
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
     const staleEvaluation = structuredClone(
       (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId]!,
     );
@@ -804,11 +643,7 @@ describe("withheld freshness state", () => {
     await writeDiscoveryState(project.paths.discoveryFile, crashResidue);
     await rm(source);
 
-    const recovered = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const recovered = await importAll();
     expect(recovered.prunedWithheld).toEqual([]);
     expect(
       (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId],
@@ -824,11 +659,7 @@ describe("withheld freshness state", () => {
       userText: `credential ${FAKE_KEY}`,
     });
     const candidateId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: sessionId });
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
     const staleEvaluation = structuredClone(
       (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId]!,
     );
@@ -845,11 +676,7 @@ describe("withheld freshness state", () => {
     const residue = await readDiscoveryState(project.paths.discoveryFile);
     residue.evaluations[candidateId] = staleEvaluation;
     await writeDiscoveryState(project.paths.discoveryFile, residue);
-    const recovered = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const recovered = await importAll();
 
     expect(recovered.prunedWithheld).toEqual([]);
     expect(recovered.tombstoned).toHaveLength(1);
@@ -869,11 +696,7 @@ describe("withheld freshness state", () => {
       userText: `credential ${FAKE_KEY}`,
     });
     const candidateId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: sessionId });
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
     expect(
       (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId],
     ).toBeDefined();
@@ -884,16 +707,8 @@ describe("withheld freshness state", () => {
     const git = Bun.spawn(["git", "init", "-q", "--initial-branch=main", nested]);
     expect(await git.exited).toBe(0);
     const childProject = await initProject(env, nested);
-    const parentSweep = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
-    const childSweep = await runImport(childProject, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const parentSweep = await importAll();
+    const childSweep = await importAll(childProject);
 
     expect(parentSweep.outOfScope).toBe(1);
     expect(parentSweep.prunedWithheld).toEqual([]);
@@ -917,31 +732,17 @@ describe("withheld freshness state", () => {
         },
       ],
     });
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
     const candidateId = sessionIdOf({
       harnessId: "claude-code",
       sourceSessionId: "accept-race",
     });
 
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await Bun.sleep(50);
+    await withHeldLease(async () => {
       const accepted = await readDiscoveryState(project.paths.discoveryFile);
       delete accepted.evaluations[candidateId];
       await writeDiscoveryState(project.paths.discoveryFile, accepted);
-    } finally {
-      lease.release();
-    }
-    await importing;
+    });
 
     expect(
       (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId],
@@ -966,21 +767,11 @@ describe("withheld freshness state", () => {
       sourceSessionId: "ignore-race",
     });
 
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await Bun.sleep(50);
+    await withHeldLease(async () => {
       const ignored = await readDiscoveryState(project.paths.discoveryFile);
       ignoreCandidate(ignored, candidateId);
       await writeDiscoveryState(project.paths.discoveryFile, ignored);
-    } finally {
-      lease.release();
-    }
-    await importing;
+    });
 
     const final = await readDiscoveryState(project.paths.discoveryFile);
     expect(final.ignored).toContain(candidateId);
@@ -988,84 +779,29 @@ describe("withheld freshness state", () => {
   });
 
   test("a flagged capture that changes while waiting is re-evaluated before persistence", async () => {
-    await writeClaudeSession(env.claudeHome, {
-      sessionId: "stale-flag",
-      cwd: env.worktree,
-      userText: `first bytes ${FAKE_KEY}`,
-    });
-    const candidateId = sessionIdOf({
-      harnessId: "claude-code",
-      sourceSessionId: "stale-flag",
-    });
-
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await Bun.sleep(50);
-      await writeClaudeSession(env.claudeHome, {
-        sessionId: "stale-flag",
-        cwd: env.worktree,
-        userText: `newer bytes ${FAKE_KEY}`,
-      });
-    } finally {
-      lease.release();
-    }
-    const report = await importing;
-    const first = (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId];
-    expect(report.flagged).toHaveLength(1);
-    expect(first).toBeDefined();
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
-    const second = (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId];
-    expect(second?.bundleDigest).toBe(first?.bundleDigest);
-    expect(second?.firstFlaggedAt).toBe(first?.firstFlaggedAt);
-  });
-
-  test("a newly discovered subagent is included in the persisted flagged evaluation", async () => {
-    const spec = {
-      sessionId: "late-flagged-subagent",
-      cwd: env.worktree,
-      userText: `credential ${FAKE_KEY}`,
-    };
-    await writeClaudeSession(env.claudeHome, spec);
+    const spec = { sessionId: "stale-flag", cwd: env.worktree };
+    await writeClaudeSession(env.claudeHome, { ...spec, userText: `first bytes ${FAKE_KEY}` });
     const candidateId = sessionIdOf({
       harnessId: "claude-code",
       sourceSessionId: spec.sessionId,
     });
 
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await Bun.sleep(50);
+    // The waiting capture both rewrites the transcript and grows a subagent;
+    // the persisted evaluation must describe the newer bytes.
+    const report = await withHeldLease(async () => {
       await writeClaudeSession(env.claudeHome, {
         ...spec,
+        userText: `newer bytes ${FAKE_KEY}`,
         subagents: [{ agentId: "late", spawnPrompt: "inspect retry helpers" }],
       });
-    } finally {
-      lease.release();
-    }
-    const report = await importing;
+    });
     const first = (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId];
     expect(report.flagged).toHaveLength(1);
     expect(first).toBeDefined();
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
     const second = (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId];
     expect(second?.bundleDigest).toBe(first?.bundleDigest);
+    expect(second?.firstFlaggedAt).toBe(first?.firstFlaggedAt);
   });
 
   test("a changed transcript cannot hide a later missing subagent artifact", async () => {
@@ -1079,23 +815,13 @@ describe("withheld freshness state", () => {
     const candidateId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: sessionId });
     const subagent = join(dirname(source), sessionId, "subagents", "agent-removed.jsonl");
 
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await Bun.sleep(50);
+    const report = await withHeldLease(async () => {
       await Bun.write(
         source,
         `${await readFile(source, "utf8")}${JSON.stringify({ type: "progress", sessionId })}\n`,
       );
       await rm(subagent);
-    } finally {
-      lease.release();
-    }
-    const report = await importing;
+    });
 
     expect(report.prunedWithheld.map((record) => record.candidateId)).toEqual([candidateId]);
     expect(
@@ -1107,27 +833,13 @@ describe("withheld freshness state", () => {
     const spec = { sessionId: "late-clean-subagent", cwd: env.worktree };
     await writeClaudeSession(env.claudeHome, spec);
 
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await Bun.sleep(50);
+    const first = await withHeldLease(async () => {
       await writeClaudeSession(env.claudeHome, {
         ...spec,
         subagents: [{ agentId: "late", spawnPrompt: "inspect retry helpers" }],
       });
-    } finally {
-      lease.release();
-    }
-    const first = await importing;
-    const second = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
     });
+    const second = await importAll();
 
     expect(first.accepted).toHaveLength(1);
     expect(second.accepted).toHaveLength(0);
@@ -1145,19 +857,9 @@ describe("withheld freshness state", () => {
       sourceSessionId: "lost-before-evaluation",
     });
 
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await Bun.sleep(50);
+    const report = await withHeldLease(async () => {
       await rm(source);
-    } finally {
-      lease.release();
-    }
-    const report = await importing;
+    });
 
     expect(
       (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId],
@@ -1170,51 +872,26 @@ describe("withheld freshness state", () => {
     ).toEqual([candidateId]);
   });
 
-  test("a vanished Opening Path preserves a current flagged evaluation", async () => {
-    const cwd = join(env.worktree, "vanishing-flagged-cwd");
-    await mkdir(cwd, { recursive: true });
+  test("a vanished Opening Path preserves a current flagged evaluation but cannot hide source loss", async () => {
+    const survivingCwd = join(env.worktree, "vanishing-flagged-cwd");
+    const lostCwd = join(env.worktree, "vanishing-lost-cwd");
+    await mkdir(survivingCwd, { recursive: true });
+    await mkdir(lostCwd, { recursive: true });
     await writeClaudeSession(env.claudeHome, {
       sessionId: "flagged-after-cwd-vanished",
-      cwd,
+      cwd: survivingCwd,
       userText: `still present ${FAKE_KEY}`,
     });
-    const candidateId = sessionIdOf({
+    const lostSource = await writeClaudeSession(env.claudeHome, {
+      sessionId: "flagged-lost-after-cwd-vanished",
+      cwd: lostCwd,
+      userText: `soon missing ${FAKE_KEY}`,
+    });
+    const survivingId = sessionIdOf({
       harnessId: "claude-code",
       sourceSessionId: "flagged-after-cwd-vanished",
     });
-
-    const pause = pauseNextProjectWriterAcquire();
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await pause.reached;
-      await rm(cwd, { recursive: true, force: true });
-    } finally {
-      pause.resume();
-      pause.restore();
-    }
-    const report = await importing;
-
-    expect(report.flagged).toHaveLength(1);
-    expect(report.outOfScope).toBe(0);
-    expect(report.prunedWithheld).toEqual([]);
-    expect(
-      (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId],
-    ).toBeDefined();
-  });
-
-  test("a vanished Opening Path cannot hide flagged source loss", async () => {
-    const cwd = join(env.worktree, "vanishing-lost-cwd");
-    await mkdir(cwd, { recursive: true });
-    const source = await writeClaudeSession(env.claudeHome, {
-      sessionId: "flagged-lost-after-cwd-vanished",
-      cwd,
-      userText: `soon missing ${FAKE_KEY}`,
-    });
-    const candidateId = sessionIdOf({
+    const lostId = sessionIdOf({
       harnessId: "claude-code",
       sourceSessionId: "flagged-lost-after-cwd-vanished",
     });
@@ -1227,25 +904,26 @@ describe("withheld freshness state", () => {
     );
     try {
       await pause.reached;
-      await rm(cwd, { recursive: true, force: true });
-      await rm(source);
+      await rm(survivingCwd, { recursive: true, force: true });
+      await rm(lostCwd, { recursive: true, force: true });
+      await rm(lostSource);
     } finally {
       pause.resume();
       pause.restore();
     }
     const report = await importing;
 
-    expect(report.flagged).toHaveLength(0);
+    expect(report.flagged).toHaveLength(1);
     expect(report.outOfScope).toBe(0);
-    expect(report.prunedWithheld.map((record) => record.candidateId)).toEqual([candidateId]);
-    expect(
-      (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId],
-    ).toBeUndefined();
+    expect(report.prunedWithheld.map((record) => record.candidateId)).toEqual([lostId]);
+    const evaluations = (await readDiscoveryState(project.paths.discoveryFile)).evaluations;
+    expect(evaluations[survivingId]).toBeDefined();
+    expect(evaluations[lostId]).toBeUndefined();
     expect(
       (await readWithheldLosses(project.paths.withheldLossFile)).map(
         (record) => record.candidateId,
       ),
-    ).toEqual([candidateId]);
+    ).toEqual([lostId]);
   });
 
   test("a failed clean recapture preserves old masked evidence until a full loss sweep", async () => {
@@ -1256,11 +934,7 @@ describe("withheld freshness state", () => {
       userText: `credential ${FAKE_KEY}`,
     });
     const candidateId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: sessionId });
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
     const before = structuredClone(
       (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId]!,
     );
@@ -1270,19 +944,9 @@ describe("withheld freshness state", () => {
       userText: "the credential has been removed",
     });
 
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: null, dryRun: false, onlyCandidateIds: null },
-    );
-    try {
-      await Bun.sleep(50);
+    const failed = await withHeldLease(async () => {
       await rm(source);
-    } finally {
-      lease.release();
-    }
-    const failed = await importing;
+    });
     expect(failed.accepted).toEqual([]);
     expect(failed.sourceErrors).toHaveLength(1);
     expect(
@@ -1290,11 +954,7 @@ describe("withheld freshness state", () => {
     ).toEqual(before);
     expect(await readWithheldLosses(project.paths.withheldLossFile)).toEqual([]);
 
-    const swept = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const swept = await importAll();
     expect(swept.prunedWithheld.map((record) => record.candidateId)).toEqual([candidateId]);
     expect(
       (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId],
@@ -1307,30 +967,19 @@ describe("withheld freshness state", () => {
       cwd: env.worktree,
       userText: `soon missing ${FAKE_KEY}`,
     });
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
     const candidateId = sessionIdOf({
       harnessId: "claude-code",
       sourceSessionId: "narrow-lost-after-capture",
     });
     const before = (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId];
 
-    const lease = await WriterLease.acquire(project.paths.writerLockFile, 1_000);
-    const importing = runImport(
-      project,
-      { ...env.env, GLIA_LEASE_TIMEOUT_MS: "2000" },
-      { harness: "claude-code", dryRun: false, onlyCandidateIds: null },
+    const report = await withHeldLease(
+      async () => {
+        await rm(source);
+      },
+      { harness: "claude-code" },
     );
-    try {
-      await Bun.sleep(50);
-      await rm(source);
-    } finally {
-      lease.release();
-    }
-    const report = await importing;
 
     expect(
       (await readDiscoveryState(project.paths.discoveryFile)).evaluations[candidateId],
@@ -1370,11 +1019,7 @@ describe("zero-result freshness advisories", () => {
         },
       ],
     });
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
     const candidateId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "old-secret" });
     const state = await readDiscoveryState(project.paths.discoveryFile);
     state.evaluations[candidateId]!.firstFlaggedAt = new Date(
@@ -1417,11 +1062,7 @@ describe("zero-result freshness advisories", () => {
         },
       ],
     });
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
 
     const events: string[] = [];
     const decorated = await runWithSessionAdvisory(
@@ -1446,11 +1087,7 @@ describe("zero-result freshness advisories", () => {
       cwd: env.worktree,
       userText: `credential ${FAKE_KEY}`,
     });
-    await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    await importAll();
 
     const events: string[] = [];
     const decorated = await runWithSessionAdvisory(
@@ -1470,11 +1107,7 @@ describe("zero-result freshness advisories", () => {
 
   test("an advisory read failure cannot turn a committed command into a false failure", async () => {
     await writeClaudeSession(env.claudeHome, { sessionId: "advisory-failure", cwd: env.worktree });
-    const imported = await runImport(project, env.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
-    });
+    const imported = await importAll();
     const sessionId = imported.accepted[0]!.sessionId;
     await Bun.write(
       project.paths.discoveryFile,

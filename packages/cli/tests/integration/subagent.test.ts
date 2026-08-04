@@ -329,10 +329,6 @@ describe("subagent lifecycle across the command surface", () => {
     expect(only.human ?? "").toMatch(/subagent(?! legacy)\s*$/m);
   });
 
-  test("a subagent spawn prompt never becomes the parent's label", async () => {
-    const outcome = await listCommand.run(ctx, [], {});
-    const sessions = (outcome.json as { sessions: Record<string, unknown>[] }).sessions;
-    const parent = sessions.find((s) => s["sessionId"] === ccParentId);
-    expect(parent?.["label"]).toBe("the human's own opening request");
-  });
+  // Label derivation (spawn prompts never become the label) is a
+  // normalization fact, covered in unit/adapters.test.ts.
 });

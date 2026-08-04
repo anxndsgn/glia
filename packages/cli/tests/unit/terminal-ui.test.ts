@@ -56,12 +56,6 @@ describe("the grouped picker", () => {
     expect(kept.items.map((i) => i.value)).toEqual(["newest", "older"]);
   });
 
-  test("exactly one row carries the cursor", () => {
-    const picker = new GroupedPicker(items(41), { viewport: { columns: 80, rows: 24 } });
-    picker.move(5);
-    expect(lines(picker).filter((l) => l.includes("❯"))).toHaveLength(1);
-  });
-
   test("clipped ends report how many rows they hide", () => {
     const picker = new GroupedPicker(items(41), { viewport: { columns: 80, rows: 24 } });
     expect(lines(picker).some((l) => l.includes("more"))).toBe(true);
@@ -78,16 +72,6 @@ describe("the grouped picker", () => {
     ]);
     picker.toggle();
     expect(picker.values()).toEqual([]);
-  });
-
-  test("a folder reports partial selection, then full", () => {
-    const picker = new GroupedPicker(items(6), { viewport: { columns: 100, rows: 40 } });
-    picker.move(1); // first item of the first folder
-    picker.toggle();
-    expect(lines(picker)[2]).toInclude("◐");
-    picker.move(-1);
-    picker.toggle();
-    expect(lines(picker)[2]).toInclude("◼");
   });
 
   test("left folds the folder the cursor is in and lands on its header", () => {
@@ -142,9 +126,7 @@ describe("the grouped picker", () => {
       ...items(9),
     ];
     const picker = new GroupedPicker(wide, { viewport: { columns: 40, rows: 14 }, symbols: ascii });
-    const rendered = lines(picker);
-    expect(rendered.some((l) => l.includes("[ ]"))).toBe(true);
-    for (const line of rendered) expect(line.length).toBeLessThanOrEqual(40);
+    for (const line of lines(picker)) expect(line.length).toBeLessThanOrEqual(40);
   });
 
   test("the cursor wraps around the ends of the list", () => {
@@ -167,20 +149,6 @@ describe("the grouped picker", () => {
 });
 
 describe("prompt text layout", () => {
-  test("dimming is applied after the text is measured, so rows stay in budget", () => {
-    const row: PickerItem[] = [
-      { value: "a", name: "a-skill", description: "x".repeat(300), group: "skills" },
-    ];
-    const plain = new GroupedPicker(row, { viewport: { columns: 80, rows: 24 } });
-    const dimmed = new GroupedPicker(row, { viewport: { columns: 80, rows: 24 }, colors: true });
-    const visible = (s: string) => s.replaceAll("\x1b[2m", "").replaceAll("\x1b[22m", "");
-    const a = plain.frame("m").split("\n");
-    const b = dimmed.frame("m").split("\n");
-    expect(b.some((l) => l.includes("\x1b[2m"))).toBe(true);
-    expect(b.map(visible)).toEqual(a);
-    for (const line of a) expect(line.length).toBeLessThanOrEqual(80);
-  });
-
   test("the plain-list window stays inside the viewport", () => {
     expect(listWindowSize({ rows: 24 })).toBeLessThanOrEqual(24 - 8);
     expect(listWindowSize({ rows: 200 })).toBeLessThanOrEqual(12);

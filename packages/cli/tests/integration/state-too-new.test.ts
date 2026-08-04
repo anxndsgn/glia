@@ -39,20 +39,56 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 }
 
 describe("STATE_TOO_NEW: state written by a newer Glia names the binary, not the file", () => {
-  test("Project Bindings", async () => {
-    const file = join(env.root, "too-new-bindings.json");
-    await writeJson(file, { schemaVersion: 99, projectId: "prj_x", roots: [], aliases: [] });
-    await expect(readBindings(file)).rejects.toMatchObject({
-      code: "STATE_TOO_NEW",
-      details: { stateKind: "Project Bindings", path: file, foundVersion: 99, supportedVersion: 1 },
-    });
-  });
+  const tooNewReads: {
+    kind: string;
+    payload: unknown;
+    file: (root: string) => string;
+    read: (root: string, file: string) => Promise<unknown>;
+    details?: Record<string, unknown>;
+  }[] = [
+    {
+      kind: "Project Bindings",
+      payload: { schemaVersion: 99, projectId: "prj_x", roots: [], aliases: [] },
+      file: (root) => join(root, "too-new-bindings.json"),
+      read: (_root, file) => readBindings(file),
+      details: { stateKind: "Project Bindings", foundVersion: 99, supportedVersion: 1 },
+    },
+    {
+      kind: "Replica identity",
+      payload: { schemaVersion: 2, replicaId: "rpl_x" },
+      file: (root) => identityFile(join(root, "too-new-home")),
+      read: (root) => readReplicaIdentity(join(root, "too-new-home")),
+    },
+    {
+      kind: "sync state",
+      payload: { schemaVersion: 9, lastSyncAt: "x", outcome: "pushed", head: "h" },
+      file: (root) => join(root, "too-new-sync.json"),
+      read: (_root, file) => readSyncState(file),
+    },
+    {
+      kind: "deletion propagation state",
+      payload: { schemaVersion: 3, baseHead: null, events: [] },
+      file: (root) => join(root, "too-new-pending.json"),
+      read: (_root, file) => readDeletionPending(file),
+    },
+    {
+      kind: "discovery state",
+      payload: { schemaVersion: 7, ignored: [], associations: {}, evaluations: {} },
+      file: (root) => join(root, "too-new-discovery.json"),
+      read: (_root, file) => readDiscoveryState(file),
+    },
+  ];
 
-  test("Replica identity", async () => {
-    const home = join(env.root, "too-new-home");
-    await writeJson(identityFile(home), { schemaVersion: 2, replicaId: "rpl_x" });
-    await expect(readReplicaIdentity(home)).rejects.toMatchObject({ code: "STATE_TOO_NEW" });
-  });
+  for (const { kind, payload, file, read, details } of tooNewReads) {
+    test(kind, async () => {
+      const path = file(env.root);
+      await writeJson(path, payload);
+      await expect(read(env.root, path)).rejects.toMatchObject({
+        code: "STATE_TOO_NEW",
+        ...(details ? { details: { ...details, path } } : {}),
+      });
+    });
+  }
 
   test("glia.json declaration: too-new is STATE_TOO_NEW, in-range invalid stays invalid", async () => {
     const worktree = join(env.root, "too-new-worktree");
@@ -70,18 +106,6 @@ describe("STATE_TOO_NEW: state written by a newer Glia names the binary, not the
     await expect(readDeclaration(worktree)).rejects.toMatchObject({ code: "INVALID_DECLARATION" });
   });
 
-  test("sync state", async () => {
-    const file = join(env.root, "too-new-sync.json");
-    await writeJson(file, { schemaVersion: 9, lastSyncAt: "x", outcome: "pushed", head: "h" });
-    await expect(readSyncState(file)).rejects.toMatchObject({ code: "STATE_TOO_NEW" });
-  });
-
-  test("deletion propagation state", async () => {
-    const file = join(env.root, "too-new-pending.json");
-    await writeJson(file, { schemaVersion: 3, baseHead: null, events: [] });
-    await expect(readDeletionPending(file)).rejects.toMatchObject({ code: "STATE_TOO_NEW" });
-  });
-
   test("Deletion Ledger", () => {
     const content = JSON.stringify({
       schemaVersion: 2,
@@ -92,12 +116,6 @@ describe("STATE_TOO_NEW: state written by a newer Glia names the binary, not the
     expect(() => parseLedgerFile("session/deletions/ses_x.json", content)).toThrow(
       /newer than this Glia supports/,
     );
-  });
-
-  test("discovery state", async () => {
-    const file = join(env.root, "too-new-discovery.json");
-    await writeJson(file, { schemaVersion: 7, ignored: [], associations: {}, evaluations: {} });
-    await expect(readDiscoveryState(file)).rejects.toMatchObject({ code: "STATE_TOO_NEW" });
   });
 
   test("withheld loss state refuses downgrade writes", async () => {

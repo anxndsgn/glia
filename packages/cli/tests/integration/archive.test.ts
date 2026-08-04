@@ -102,7 +102,7 @@ async function writeMarker(
 }
 
 describe("Session Archive", () => {
-  test("1/3/8/9/12/13/14. collection filtering, direct addressing, preview, no-op, status, and rebuild follow the contract", async () => {
+  test("collection filtering, direct addressing, preview, no-op, status, and rebuild follow the contract", async () => {
     const markerFile = join(project.paths.storeDir, archiveMarkerPath(sessionId));
     const initialHead = await headOf();
 
@@ -210,7 +210,7 @@ describe("Session Archive", () => {
     expect(await headOf()).toBe(beforeUnarchiveNoop);
   });
 
-  test("2/7. transitions change only marker metadata; a new Revision is accepted and stays hidden", async () => {
+  test("transitions change only marker metadata; a new Revision is accepted and stays hidden", async () => {
     const storeDir = project.paths.storeDir;
     const beforeHead = await headOf();
     const sessionTreeBefore = (
@@ -259,7 +259,7 @@ describe("Session Archive", () => {
     }
   });
 
-  test("10. deletion purges the marker and history; explicit re-admission returns active", async () => {
+  test("deletion purges the marker and history; explicit re-admission returns active", async () => {
     await transitionSessionArchive(project, env.env, sessionId, "archived");
     const markerPath = archiveMarkerPath(sessionId);
     expect(await Bun.file(join(project.paths.storeDir, markerPath)).exists()).toBeTrue();
@@ -302,7 +302,7 @@ describe("Session Archive", () => {
     });
   });
 
-  test("4. shared archive state synchronizes and restores default filtering on another Replica", async () => {
+  test("shared archive state synchronizes and restores default filtering on another Replica", async () => {
     const remote = await makeBareRemote(env);
     await setDeclaredRemote(env.worktree, remote);
     project = await loadProject(env.worktree, env.home);
@@ -326,7 +326,7 @@ describe("Session Archive", () => {
     }
   });
 
-  test("5. divergent markers merge by timestamp then Replica ID without a Session Conflict", async () => {
+  test("divergent markers merge by timestamp then Replica ID without a Session Conflict", async () => {
     const remote = await makeBareRemote(env);
     await setDeclaredRemote(env.worktree, remote);
     project = await loadProject(env.worktree, env.home);
@@ -374,7 +374,7 @@ describe("Session Archive", () => {
     expect([firstParent, secondParent].join("\n")).toContain(markerB.replicaId);
   });
 
-  test("6. a concurrent Revision advance and archive transition merge independently", async () => {
+  test("a concurrent Revision advance and archive transition merge independently", async () => {
     const remote = await makeBareRemote(env);
     await setDeclaredRemote(env.worktree, remote);
     project = await loadProject(env.worktree, env.home);

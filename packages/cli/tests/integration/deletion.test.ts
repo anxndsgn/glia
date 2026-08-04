@@ -216,7 +216,7 @@ describe("session deletion (local operation)", () => {
     expect(changed).toContain(ledgerFilePath(sessionId));
   });
 
-  test("20/21. deleting an already-deleted or unknown session is typed and epoch-stable; a concurrent writer gets PROJECT_BUSY", async () => {
+  test("deleting an already-deleted or unknown session is typed and epoch-stable; a concurrent writer gets PROJECT_BUSY", async () => {
     const { project } = await machineA(["del-2"]);
     const sessionId = sessionIdOfSession("del-2");
     await runDelete(project, envA.env, sessionId);
@@ -246,7 +246,7 @@ describe("session deletion (local operation)", () => {
     }
   });
 
-  test("19. an interrupted deletion leaves the pre-deletion Store fully intact and a retry succeeds", async () => {
+  test("an interrupted deletion leaves the pre-deletion Store fully intact and a retry succeeds", async () => {
     const { project } = await machineA(["intr-1"]);
     const sessionId = sessionIdOfSession("intr-1");
     const store = new ProjectStore(project.paths.storeDir);
@@ -273,7 +273,7 @@ describe("session deletion (local operation)", () => {
     expect(await Bun.file(transcriptPath(project, sessionId)).exists()).toBeFalse();
   });
 
-  test("11. a Session frozen in Session Conflict is deletable; the preview names both candidates and the layout is purged", async () => {
+  test("a Session frozen in Session Conflict is deletable; the preview names both candidates and the layout is purged", async () => {
     // Recipe from the sync suite: the same Session grows differently on two machines.
     const projectA1 = await initProject(envA);
     await writeClaudeSession(envA.claudeHome, {
@@ -325,7 +325,7 @@ describe("session deletion (local operation)", () => {
     expect(await headOf(projectA)).toBe(await headOf(projectB));
   });
 
-  test("17. deletion on a local_only Project completes offline; a later first synchronization merges ledgers by union with the larger epoch", async () => {
+  test("deletion on a local_only Project completes offline; a later first synchronization merges ledgers by union with the larger epoch", async () => {
     // Local-only machine A deletes with no remote declared.
     const project = await initProject(envA);
     await writeClaudeSession(envA.claudeHome, {
@@ -376,7 +376,7 @@ describe("session deletion (local operation)", () => {
 });
 
 describe("session deletion (propagation protocol)", () => {
-  test("3/4/10. the rewrite is deterministic, the second replica retains nothing, heads converge, and transient payload is purged before success", async () => {
+  test("the rewrite is deterministic, the second replica retains nothing, heads converge, and transient payload is purged before success", async () => {
     const { project: projectA } = await machineA(["prop-1", "prop-2"]);
     await sync(projectA, envA.env);
     const { b, project: projectB } = await replicaB();
@@ -423,7 +423,7 @@ describe("session deletion (propagation protocol)", () => {
     expect((await readLocalStoreMarker(projectB.paths.storeDir))!.epoch).toBe(1);
   });
 
-  test("4. an unexplained rewrite and a recomputation mismatch are both refused as REMOTE_REWRITTEN with zero local mutation and distinguishable details", async () => {
+  test("an unexplained rewrite and a recomputation mismatch are both refused as REMOTE_REWRITTEN with zero local mutation and distinguishable details", async () => {
     const { project: projectA, remoteDir } = await machineA(["guard-1"]);
     await sync(projectA, envA.env);
     const { b, project: projectB } = await replicaB();
@@ -510,7 +510,7 @@ describe("session deletion (propagation protocol)", () => {
     expect((await sync(projectB, b.env)).classification).toBe("up_to_date");
   });
 
-  test("5. a replica behind the rewrite base verifies by prefix image and receives never-synchronized commits as ordinary fresh content", async () => {
+  test("a replica behind the rewrite base verifies by prefix image and receives never-synchronized commits as ordinary fresh content", async () => {
     const { project: projectA } = await machineA(["early-1"]);
     await sync(projectA, envA.env);
     const { b, project: projectB } = await replicaB(); // B stops here: behind the base.
@@ -537,7 +537,7 @@ describe("session deletion (propagation protocol)", () => {
     expect(await listSessionIds(projectB.paths.storeDir)).toEqual([sessionIdOfSession("early-1")]);
   });
 
-  test("6. a deletion pushed after the remote advanced re-derives automatically, and a remote update to the deleted session is stripped in deletion's favor", async () => {
+  test("a deletion pushed after the remote advanced re-derives automatically, and a remote update to the deleted session is stripped in deletion's favor", async () => {
     const { project: projectA } = await machineA(["adv-1", "adv-2"]);
     await sync(projectA, envA.env);
     const { b, project: projectB } = await replicaB();
@@ -575,7 +575,7 @@ describe("session deletion (propagation protocol)", () => {
     expect((await sync(projectA, envA.env)).classification).toBe("up_to_date");
   });
 
-  test("7. two concurrent deletions of different sessions serialize through push retry with consecutive epochs and converge", async () => {
+  test("two concurrent deletions of different sessions serialize through push retry with consecutive epochs and converge", async () => {
     const { project: projectA } = await machineA(["two-1", "two-2"]);
     await sync(projectA, envA.env);
     const { b, project: projectB } = await replicaB();
@@ -605,7 +605,7 @@ describe("session deletion (propagation protocol)", () => {
     ).toBeFalse();
   });
 
-  test("8. two independent deletions of the same session converge on one deterministically chosen ledger slot", async () => {
+  test("two independent deletions of the same session converge on one deterministically chosen ledger slot", async () => {
     const { project: projectA } = await machineA(["same-1", "same-keep"]);
     await sync(projectA, envA.env);
     const { b, project: projectB } = await replicaB();
@@ -629,7 +629,7 @@ describe("session deletion (propagation protocol)", () => {
     ).toBeFalse();
   });
 
-  test("9/23. bystander commits survive; unsynchronized changes to the deleted session are preserved export-shaped, reported, and never overwritten", async () => {
+  test("bystander commits survive; unsynchronized changes to the deleted session are preserved export-shaped, reported, and never overwritten", async () => {
     const { project: projectA } = await machineA(["by-1", "by-2"]);
     await sync(projectA, envA.env);
     const { b, project: projectB } = await replicaB();
@@ -692,7 +692,7 @@ describe("session deletion (propagation protocol)", () => {
     );
   });
 
-  test("22. one sync carries several pending epochs together and the receiver applies them in epoch order", async () => {
+  test("one sync carries several pending epochs together and the receiver applies them in epoch order", async () => {
     const { project: projectA } = await machineA(["multi-1", "multi-2", "multi-3"]);
     await sync(projectA, envA.env);
     const { b, project: projectB } = await replicaB();
@@ -711,7 +711,7 @@ describe("session deletion (propagation protocol)", () => {
     expect(await headOf(projectA)).toBe(await headOf(projectB));
   });
 
-  test("15. a remote refusing non-fast-forward pushes yields REWRITE_PUSH_REFUSED, status reports pending, and a later permitted sync completes", async () => {
+  test("a remote refusing non-fast-forward pushes yields REWRITE_PUSH_REFUSED, status reports pending, and a later permitted sync completes", async () => {
     const { project: projectA, remoteDir } = await machineA(["deny-1"]);
     await sync(projectA, envA.env);
     await gitOrThrow(["config", "receive.denyNonFastForwards", "true"], remoteDir);
@@ -732,7 +732,7 @@ describe("session deletion (propagation protocol)", () => {
     expect(await readDeletionPending(projectA.paths.deletionPendingFile)).toBeNull();
   });
 
-  test("16. a deletion rewrite arriving at a replica with the Session module disabled is still verified, applied, and purged", async () => {
+  test("a deletion rewrite arriving at a replica with the Session module disabled is still verified, applied, and purged", async () => {
     const { project: projectA } = await machineA(["dis-1", "dis-2"]);
     await sync(projectA, envA.env);
     const { b, project: projectB } = await replicaB();
@@ -756,7 +756,7 @@ describe("session deletion (propagation protocol)", () => {
     expect(await headOf(disabledB)).toBe(await headOf(projectA));
   });
 
-  test("18. an older Glia meeting a newer store format is told to upgrade, never REMOTE_REWRITTEN; a deletion-free store keeps its prior format", async () => {
+  test("an older Glia meeting a newer store format is told to upgrade, never REMOTE_REWRITTEN; a deletion-free store keeps its prior format", async () => {
     const { project: projectA, remoteDir } = await machineA(["fmt-1"]);
     await sync(projectA, envA.env);
     // A deletion-free Store keeps the base format.
@@ -794,7 +794,7 @@ describe("session deletion (propagation protocol)", () => {
 });
 
 describe("session deletion (lifecycle after deletion)", () => {
-  test("12/13. a tombstoned identity is skipped on every replica, re-admits only explicitly with a persisted override, and show answers SESSION_DELETED", async () => {
+  test("a tombstoned identity is skipped on every replica, re-admits only explicitly with a persisted override, and show answers SESSION_DELETED", async () => {
     const { project: projectA } = await machineA(["life-1"]);
     await sync(projectA, envA.env);
     const { b, project: projectB } = await replicaB();
@@ -868,7 +868,7 @@ describe("session deletion (lifecycle after deletion)", () => {
     expect(await ledgerEventsFor(projectA.paths.storeDir, sessionId)).toHaveLength(2);
   });
 
-  test("12. re-admitting an explicitly associated identity restores the association, so later source growth flows as ordinary Revisions", async () => {
+  test("re-admitting an explicitly associated identity restores the association, so later source growth flows as ordinary Revisions", async () => {
     // A Codex session with no cwd has no resolvable Opening Path: only an
     // explicit association accepts it, and deletion collapses exactly that.
     const project = await initProject(envA);
@@ -901,7 +901,7 @@ describe("session deletion (lifecycle after deletion)", () => {
     expect(growth.accepted.map((a) => a.sessionId)).toEqual([sessionId]);
   });
 
-  test("24. deleting a parent session leaves the child's continuation intact and the chain resolves to SESSION_DELETED at the parent", async () => {
+  test("deleting a parent session leaves the child's continuation intact and the chain resolves to SESSION_DELETED at the parent", async () => {
     const project0 = await initProject(envA);
     await writeClaudeSession(envA.claudeHome, {
       sessionId: "parent-1",
@@ -928,7 +928,7 @@ describe("session deletion (lifecycle after deletion)", () => {
     );
   });
 
-  test("25. tombstoned takes precedence over flagged; explicit re-acceptance re-runs detection and sessions both overrides", async () => {
+  test("tombstoned takes precedence over flagged; explicit re-acceptance re-runs detection and sessions both overrides", async () => {
     const project = await initProject(envA);
     await writeClaudeSession(envA.claudeHome, {
       sessionId: "sec-1",

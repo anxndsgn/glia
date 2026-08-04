@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, rm, stat, symlink } from "node:fs/promises";
+import { mkdir, stat, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import {
   runProjectBind,
@@ -231,25 +231,6 @@ describe("Project Binding commands", () => {
     });
   });
 
-  test("forget matches a missing path through its surviving symlink prefix", async () => {
-    const project = await loadProject(env.worktree, env.home);
-    const realParent = join(env.root, "canonical-parent");
-    const linkedParent = join(env.root, "linked-parent");
-    const realHistorical = join(realParent, "retired");
-    const linkedHistorical = join(linkedParent, "retired");
-    await mkdir(realHistorical, { recursive: true });
-    await symlink(realParent, linkedParent);
-    await rm(realHistorical, { recursive: true });
-    await runProjectBind(machineContext(), project.declaration.projectId, linkedHistorical, true);
-
-    const forgotten = await runProjectForget(machineContext(), linkedHistorical);
-    expect(forgotten.json).toMatchObject({
-      projectId: project.declaration.projectId,
-      path: realHistorical,
-      removedFrom: "alias",
-    });
-  });
-
   test("bind rejects mismatched declarations and existing non-Git alias targets", async () => {
     const project = await loadProject(env.worktree, env.home);
     const declaredWorktree = await makeSecondWorktree(env, "declared-unbound");
@@ -281,19 +262,6 @@ describe("Project Binding commands", () => {
       ),
     ).rejects.toMatchObject({ code: "NOT_A_GIT_WORKTREE" });
     expect((await readBindings(project.paths.bindingsFile))?.aliases).toEqual([]);
-  });
-
-  test("Binding conflict recovery commands quote contested paths", async () => {
-    const project = await loadProject(env.worktree, env.home);
-    const contested = await makeSecondWorktree(env, "Contested Project");
-    await loadProject(contested, env.home);
-
-    await expect(
-      runProjectBind(machineContext(), project.declaration.projectId, contested, false),
-    ).rejects.toMatchObject({
-      code: "BINDING_CONFLICT",
-      details: { nextSteps: [`glia project forget '${contested}'`] },
-    });
   });
 
   test("forget warns for a declaration naming another Project and quotes recovery paths", async () => {

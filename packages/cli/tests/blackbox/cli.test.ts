@@ -16,12 +16,9 @@ import { sessionIdOf } from "../../src/session/domain/identity.ts";
 import { hookLivenessFile } from "../../src/core/project/paths.ts";
 import {
   FAKE_KEY,
-  makeBareRemote,
-  makeSecondReplica,
   makeSecondWorktree,
   makeTestEnv,
   writeClaudeSession,
-  type ReplicaEnv,
   type TestEnv,
 } from "../helpers.ts";
 
@@ -195,7 +192,9 @@ describe("compiled CLI contract", () => {
     expect(run.stdout.trim().split("\n")).toHaveLength(1);
   });
 
-  test("the listing verbs omit defaults through the compiled binary; show keeps them", async () => {
+  // The key-set omission contract lives in integration/json-economy.test.ts;
+  // this only checks the verbs wire through the binary with the shape intact.
+  test("list, search, and show wire through the compiled binary", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "aaaa-1",
       cwd: env.worktree,
@@ -204,35 +203,17 @@ describe("compiled CLI contract", () => {
     await glia(["import"]);
 
     const listed = await glia(["--json", "list"]);
-    const listDoc = JSON.parse(listed.stdout) as {
-      formatVersion: number;
-      result: { sessions: Record<string, unknown>[] };
-    };
-    expect(listDoc.formatVersion).toBe(1);
-    expect(listed.stdout.trim().split("\n")).toHaveLength(1);
-    const entry = listDoc.result.sessions[0]!;
-    const sessionId = entry["sessionId"] as string;
-    for (const key of ["revisionDigest", "archiveState", "associationMode", "family"]) {
-      expect(entry[key]).toBeUndefined();
-    }
-    expect(entry["eventCount"]).toBeGreaterThan(0);
+    const entry = (JSON.parse(listed.stdout) as { result: { sessions: Record<string, unknown>[] } })
+      .result.sessions[0]!;
+    expect(entry["revisionDigest"]).toBeUndefined();
 
     const searched = await glia(["--json", "search", "ECONOMYPROBE"]);
-    const match = (
-      JSON.parse(searched.stdout) as { result: { matches: Record<string, unknown>[] } }
-    ).result.matches[0]!;
-    expect(match).toMatchObject({ sessionId, harnessId: "claude-code" });
-    expect(match["locator"]).toBeDefined();
-    expect(match["revisionDigest"]).toBeUndefined();
-    expect(match["memberSeqs"]).toBeUndefined();
-    expect(match["subagentId"]).toBeUndefined();
+    expect(searched.exitCode).toBe(0);
 
-    // `show` is the recovery path: the digest the listings dropped is here.
-    const shown = await glia(["--json", "show", sessionId]);
+    const shown = await glia(["--json", "show", entry["sessionId"] as string]);
     const detail = (JSON.parse(shown.stdout) as { result: { session: Record<string, unknown> } })
       .result.session;
     expect(detail["revisionDigest"]).toMatch(/^[0-9a-f]{64}$/);
-    expect(detail["archiveState"]).toBe("active");
   });
 
   test("JSON errors use the same single-document stdout contract with non-zero exit", async () => {
@@ -290,7 +271,9 @@ describe("compiled CLI contract", () => {
     expect(misuse.stderr).toContain("USAGE");
   });
 
-  test("session archive previews before writing, filters collections, and emits one JSON document", async () => {
+  // Archive semantics live in integration/archive.test.ts; this checks the
+  // flags parse through argv and the command answers with the JSON shape.
+  test("archive flags wire through argv: --dry-run, --yes, --include-archived", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "archive-cli",
       cwd: env.worktree,
@@ -301,94 +284,19 @@ describe("compiled CLI contract", () => {
       JSON.parse(imported.stdout) as { result: { accepted: { sessionId: string }[] } }
     ).result.accepted[0]!.sessionId;
 
-    const required = await glia(["--json", "archive", sessionId]);
-    expect(required.exitCode).not.toBe(0);
-    expect((JSON.parse(required.stdout) as { error: { code: string } }).error.code).toBe(
-      "INPUT_REQUIRED",
-    );
-    const stillVisible = await glia(["--json", "list"]);
-    expect(
-      (JSON.parse(stillVisible.stdout) as { result: { totalSessions: number } }).result
-        .totalSessions,
-    ).toBe(1);
-
-    const preview = await glia(["archive", sessionId, "--dry-run"]);
-    expect(preview.exitCode).toBe(0);
-    expect(preview.stdout).toContain("does not remove evidence");
-
+    expect((await glia(["archive", sessionId, "--dry-run"])).exitCode).toBe(0);
     const archived = await glia(["--json", "archive", sessionId, "--yes"]);
     expect(archived.exitCode).toBe(0);
-    expect(archived.stdout.trim().split("\n")).toHaveLength(1);
-    const archiveDoc = JSON.parse(archived.stdout) as {
-      formatVersion: number;
-      command: string;
-      result: { applied: boolean; nextState: string };
-    };
-    expect(archiveDoc.formatVersion).toBe(1);
-    expect(archiveDoc.command).toBe("archive");
-    expect(archiveDoc.result).toMatchObject({ applied: true, nextState: "archived" });
-
-    const hidden = await glia(["--json", "search", "archive cli"]);
-    expect(
-      (JSON.parse(hidden.stdout) as { result: { totalMatches: number } }).result.totalMatches,
-    ).toBe(0);
-    const included = await glia(["--json", "search", "archive cli", "--include-archived"]);
-    const match = (
-      JSON.parse(included.stdout) as {
-        result: { matches: { archiveState: string }[] };
-      }
-    ).result.matches[0];
-    expect(match?.archiveState).toBe("archived");
-
-    const restored = await glia(["--json", "unarchive", sessionId, "--yes"]);
-    expect(restored.exitCode).toBe(0);
-    expect(
-      (JSON.parse(restored.stdout) as { result: { nextState: string } }).result.nextState,
-    ).toBe("active");
-  });
-
-  test("fork twins get family notes on list and cross-Session collapse with honest counts on search", async () => {
-    const originPath = await writeClaudeSession(env.claudeHome, {
-      sessionId: "fork-cli",
-      cwd: env.worktree,
-      userText: "FORKCLIPROBE shared prefix",
+    expect(JSON.parse(archived.stdout)).toMatchObject({
+      command: "archive",
+      result: { applied: true, nextState: "archived" },
     });
-    // A desktop-fork twin: the copied file keeps event identifiers,
-    // timestamps, and messages; only the envelope session id changes.
-    const copied = (await Bun.file(originPath).text())
-      .trim()
-      .split("\n")
-      .map((line) => {
-        const parsed = JSON.parse(line) as Record<string, unknown>;
-        parsed["sessionId"] = "fork-cli-twin";
-        return JSON.stringify(parsed);
-      });
-    await Bun.write(
-      join(env.claudeHome, "projects", env.worktree.replaceAll("/", "-"), "fork-cli-twin.jsonl"),
-      copied.join("\n") + "\n",
-    );
-    await glia(["import"]);
-
-    const listed = await glia(["list"]);
-    expect(listed.exitCode).toBe(0);
-    expect(listed.stdout).toContain("(family of 2)");
-    expect(listed.stdout).toContain("(family: ses_");
-
-    const search = await glia(["--json", "search", "FORKCLIPROBE"]);
-    expect(search.exitCode).toBe(0);
-    const doc = JSON.parse(search.stdout) as {
-      result: {
-        totalMatches: number;
-        familyCollapsedMatches: number;
-        matches: { alsoIn?: string[] }[];
-      };
-    };
-    expect(doc.result.totalMatches).toBe(1);
-    expect(doc.result.familyCollapsedMatches).toBe(1);
-    expect(doc.result.matches[0]!.alsoIn).toHaveLength(1);
+    expect((await glia(["--json", "search", "needle", "--include-archived"])).exitCode).toBe(0);
   });
 
-  test("subagent facts reach the JSON documents of show, view, and search", async () => {
+  // Subagent facts across show/view/search live in integration/subagent.test.ts;
+  // this only checks --filter's subagent vocabulary parses through argv.
+  test("search --filter subagent wires through argv", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "sub-cli",
       cwd: env.worktree,
@@ -396,36 +304,12 @@ describe("compiled CLI contract", () => {
       subagents: [{ agentId: "alpha-1111", spawnPrompt: "SUBCLIPROBE search the repo" }],
     });
     await glia(["import"]);
-    const sessionId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "sub-cli" });
 
-    const shown = await glia(["--json", "show", sessionId]);
-    expect(shown.exitCode).toBe(0);
-    const showDoc = JSON.parse(shown.stdout) as {
-      result: { session: { subagent: Record<string, unknown> } };
-    };
-    expect(showDoc.result.session.subagent).toMatchObject({
-      kind: null,
-      transcriptCount: 1,
-      spawnedSessionIds: [],
-    });
-
-    const viewed = await glia(["--json", "view", sessionId, "--all"]);
-    const viewDoc = JSON.parse(viewed.stdout) as {
-      result: { session: { sourceFiles: string[]; subagent: Record<string, unknown> } };
-    };
-    expect(viewDoc.result.session.sourceFiles).toContain("source/subagents/agent-alpha-1111.jsonl");
-    expect(viewDoc.result.session.subagent).toMatchObject({ transcriptCount: 1 });
-
-    // The provenance slice is part of the documented --filter vocabulary.
     const search = await glia(["--json", "search", "SUBCLIPROBE", "--filter", "subagent"]);
     expect(search.exitCode).toBe(0);
-    const searchDoc = JSON.parse(search.stdout) as {
-      result: { totalMatches: number; matches: { locator: { sourceFile: string } }[] };
-    };
-    expect(searchDoc.result.totalMatches).toBe(1);
-    expect(searchDoc.result.matches[0]!.locator.sourceFile).toBe(
-      "source/subagents/agent-alpha-1111.jsonl",
-    );
+    expect(
+      (JSON.parse(search.stdout) as { result: { totalMatches: number } }).result.totalMatches,
+    ).toBe(1);
   });
 
   test("source bundle bytes and hashes survive store acceptance and export exactly", async () => {
@@ -588,89 +472,30 @@ describe("compiled CLI contract", () => {
     }
   });
 
-  test("session delete confirms before mutating, states the limitation verbatim, and leaves a queryable tombstone", async () => {
+  // Tombstone/re-admission lifecycle lives in integration/deletion.test.ts;
+  // this checks the confirmation gate and result shape through argv.
+  test("session delete requires confirmation through argv and --yes applies", async () => {
     await writeClaudeSession(env.claudeHome, { sessionId: "cli-del-1", cwd: env.worktree });
     await glia(["import"]);
     const sessionId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "cli-del-1" });
 
-    // --json without --yes and non-TTY without --yes are both
-    // INPUT_REQUIRED, reported before any Store mutation.
-    const jsonBlocked = await glia(["--json", "delete", sessionId]);
-    expect(jsonBlocked.exitCode).not.toBe(0);
-    const blockedDoc = JSON.parse(jsonBlocked.stdout) as { ok: boolean; error: { code: string } };
-    expect(blockedDoc.error.code).toBe("INPUT_REQUIRED");
-    const humanBlocked = await glia(["delete", sessionId]);
-    expect(humanBlocked.exitCode).not.toBe(0);
-    expect(humanBlocked.stderr).toContain("INPUT_REQUIRED");
-    const still = await glia(["--json", "show", sessionId]);
-    expect((JSON.parse(still.stdout) as { ok: boolean }).ok).toBeTrue();
+    const blocked = await glia(["--json", "delete", sessionId]);
+    expect(blocked.exitCode).not.toBe(0);
+    expect((JSON.parse(blocked.stdout) as { error: { code: string } }).error.code).toBe(
+      "INPUT_REQUIRED",
+    );
 
     const deleted = await glia(["--json", "delete", sessionId, "--yes"]);
     expect(deleted.exitCode).toBe(0);
-    const doc = JSON.parse(deleted.stdout) as {
-      ok: boolean;
-      result: { epoch: number; limitation: string };
-    };
+    expect(deleted.stdout.trim().split("\n")).toHaveLength(1);
+    const doc = JSON.parse(deleted.stdout) as { ok: boolean; result: { limitation: string } };
     expect(doc.ok).toBeTrue();
-    expect(doc.result.epoch).toBe(1);
     expect(doc.result.limitation).toBe(DELETION_LIMITATION);
-
-    // The human form of a second deletion also carries the statement.
-    await writeClaudeSession(env.claudeHome, { sessionId: "cli-del-2", cwd: env.worktree });
-    await glia(["import"]);
-    const second = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "cli-del-2" });
-    const human = await glia(["delete", second, "--yes"]);
-    expect(human.exitCode).toBe(0);
-    expect(human.stdout).toContain(DELETION_LIMITATION);
-
-    // The tombstone answers: ledger listing, SESSION_DELETED from show,
-    // SESSION_DELETED from a repeated delete, NOT_FOUND for a stranger.
-    const tombstones = await glia(["tombstones"]);
-    expect(tombstones.exitCode).toBe(0);
-    expect(tombstones.stdout).toContain(sessionId);
-    const shown = await glia(["--json", "show", sessionId]);
-    expect(shown.exitCode).not.toBe(0);
-    expect((JSON.parse(shown.stdout) as { error: { code: string } }).error.code).toBe(
-      "SESSION_DELETED",
-    );
-    const repeat = await glia(["--json", "delete", sessionId, "--yes"]);
-    expect((JSON.parse(repeat.stdout) as { error: { code: string } }).error.code).toBe(
-      "SESSION_DELETED",
-    );
-    const stranger = await glia([
-      "--json",
-      "delete",
-      "ses_00000000000000000000000000000000",
-      "--yes",
-    ]);
-    expect((JSON.parse(stranger.stdout) as { error: { code: string } }).error.code).toBe(
-      "NOT_FOUND",
-    );
-
-    // The import skips the tombstoned identity without failing, and the
-    // re-acceptance override needs --yes in JSON mode.
-    const reimport = await glia(["--json", "import"]);
-    const reimportDoc = JSON.parse(reimport.stdout) as {
-      result: { accepted: unknown[]; tombstoned: unknown[] };
-    };
-    expect(reimportDoc.result.accepted).toHaveLength(0);
-    expect(reimportDoc.result.tombstoned).toHaveLength(2);
-    const readmitBlocked = await glia(["--json", "accept", sessionId]);
-    expect((JSON.parse(readmitBlocked.stdout) as { error: { code: string } }).error.code).toBe(
-      "INPUT_REQUIRED",
-    );
-    const readmitted = await glia(["--json", "accept", sessionId, "--yes"]);
-    const readmittedDoc = JSON.parse(readmitted.stdout) as {
-      ok: boolean;
-      result: { accepted: { sessionId: string }[] };
-    };
-    expect(readmittedDoc.ok).toBeTrue();
-    expect(readmittedDoc.result.accepted[0]!.sessionId).toBe(sessionId);
   });
 
-  test("--version reports the injected build commit and build time in both modes", async () => {
-    // The binary compiled through scripts/build.ts carries provenance: a
-    // A fresh repository without a first commit reports explicit unknown provenance.
+  test("--version and status report the injected build provenance in both modes", async () => {
+    // The binary compiled through scripts/build.ts carries provenance; a
+    // fresh repository without a first commit reports explicit unknown.
     const identity =
       /^0\.0\.1 \((unknown|[0-9a-f]{4,40}(-dirty)?) \d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\)$/;
     const human = await glia(["--version"], env.root);
@@ -688,19 +513,16 @@ describe("compiled CLI contract", () => {
     expect(doc.result.commit).toMatch(/^(unknown|[0-9a-f]{4,40}(-dirty)?)$/);
     expect(doc.result.builtAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$/);
     expect(json.stdout.trim().split("\n")).toHaveLength(1);
-  });
 
-  test("glia status surfaces the same build identity", async () => {
-    const run = await glia(["status"]);
-    expect(run.exitCode).toBe(0);
-    expect(run.stdout).toMatch(/ {2}glia: 0\.0\.1 \((unknown|[0-9a-f]{4,40}(-dirty)?) /);
-
-    const json = await glia(["--json", "status"]);
-    const doc = JSON.parse(json.stdout) as {
-      result: { build: { version: string; commit: string; builtAt: string } };
+    const status = await glia(["status"]);
+    expect(status.exitCode).toBe(0);
+    expect(status.stdout).toMatch(/ {2}glia: 0\.0\.1 \((unknown|[0-9a-f]{4,40}(-dirty)?) /);
+    const statusJson = await glia(["--json", "status"]);
+    const statusDoc = JSON.parse(statusJson.stdout) as {
+      result: { build: { version: string; commit: string } };
     };
-    expect(doc.result.build.version).toBe("0.0.1");
-    expect(doc.result.build.commit).toMatch(/^(unknown|[0-9a-f]{4,40}(-dirty)?)$/);
+    expect(statusDoc.result.build.version).toBe("0.0.1");
+    expect(statusDoc.result.build.commit).toMatch(/^(unknown|[0-9a-f]{4,40}(-dirty)?)$/);
   });
 
   test("skill install writes the embedded SKILL.md from the compiled binary", async () => {

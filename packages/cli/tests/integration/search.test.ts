@@ -481,11 +481,6 @@ describe("session search --filter", () => {
     });
     await expect(run(["captoken"], { perSession: "0" })).rejects.toMatchObject({ code: "USAGE" });
   });
-
-  test("--event-kind has left the CLI contract", () => {
-    expect(searchCommand.options?.some((o) => o.flags.includes("--event-kind"))).toBeFalse();
-    expect(searchCommand.options?.some((o) => o.flags.includes("--filter"))).toBeTrue();
-  });
 });
 
 describe("session search --file listing", () => {
