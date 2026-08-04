@@ -126,7 +126,14 @@ describe("subagent lifecycle across the command surface", () => {
     const byId = new Map(sessions.map((s) => [s["sessionId"] as string, s]));
     expect(byId.get(ccParentId)?.["subagentCount"]).toBe(1);
     expect(byId.get(codexChildId)?.["subagentParentSession"]).toBe(codexParentId);
-    expect(byId.get(codexOrphanId)?.["subagentParent"]).toBeNull();
+    // A listing omits its defaults: an unstated parent is absent, not null,
+    // while `subagentOrigin` still states that the Session is a subagent.
+    // The row itself is pinned first, so absence cannot pass by the Session
+    // having dropped out of the listing altogether.
+    const orphan = byId.get(codexOrphanId)!;
+    expect(orphan["subagentOrigin"]).toBe(1);
+    expect(orphan["subagentKind"]).toBe("guardian");
+    expect(orphan["subagentParent"]).toBeUndefined();
   });
 
   test("search marks subagent matches and --filter subagent selects only them", async () => {
@@ -135,6 +142,15 @@ describe("subagent lifecycle across the command surface", () => {
     // Both the Claude Code subagent transcript and the Codex subagent rollout.
     expect(allJson.totalMatches).toBe(2);
     expect(all.human ?? "").toContain("subagent Explore(alpha)");
+
+    // Provenance survives the omission rule: evidence from a subagent
+    // transcript names it, evidence from a main transcript says nothing.
+    const allMatches = (all.json as { matches: Record<string, unknown>[] }).matches;
+    const fromSubagent = allMatches.find((m) => m["sessionId"] === ccParentId)!;
+    expect(fromSubagent).toMatchObject({ subagentId: "alpha-1111", subagentType: "Explore" });
+    const fromMain = allMatches.find((m) => m["sessionId"] === codexChildId)!;
+    expect(fromMain["subagentId"]).toBeUndefined();
+    expect(fromMain["subagentType"]).toBeUndefined();
 
     const only = await searchCommand.run(ctx, ["SUBPROBE"], { filter: ["subagent"] });
     const onlyJson = only.json as {

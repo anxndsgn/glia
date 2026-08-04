@@ -25,7 +25,8 @@ interface ViewEventJson {
   label: string;
   timestamp: string | null;
   toolNames?: string[];
-  text: string | null;
+  /** Absent on a timeline event with no text: the verb omits its defaults. */
+  text?: string | null;
   locator: EvidenceLocator;
   role?: unknown;
 }

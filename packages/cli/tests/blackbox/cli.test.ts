@@ -195,6 +195,46 @@ describe("compiled CLI contract", () => {
     expect(run.stdout.trim().split("\n")).toHaveLength(1);
   });
 
+  test("the listing verbs omit defaults through the compiled binary; show keeps them", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "aaaa-1",
+      cwd: env.worktree,
+      userText: "ECONOMYPROBE through the real binary",
+    });
+    await glia(["import"]);
+
+    const listed = await glia(["--json", "list"]);
+    const listDoc = JSON.parse(listed.stdout) as {
+      formatVersion: number;
+      result: { sessions: Record<string, unknown>[] };
+    };
+    expect(listDoc.formatVersion).toBe(1);
+    expect(listed.stdout.trim().split("\n")).toHaveLength(1);
+    const entry = listDoc.result.sessions[0]!;
+    const sessionId = entry["sessionId"] as string;
+    for (const key of ["revisionDigest", "archiveState", "associationMode", "family"]) {
+      expect(entry[key]).toBeUndefined();
+    }
+    expect(entry["eventCount"]).toBeGreaterThan(0);
+
+    const searched = await glia(["--json", "search", "ECONOMYPROBE"]);
+    const match = (
+      JSON.parse(searched.stdout) as { result: { matches: Record<string, unknown>[] } }
+    ).result.matches[0]!;
+    expect(match).toMatchObject({ sessionId, harnessId: "claude-code" });
+    expect(match["locator"]).toBeDefined();
+    expect(match["revisionDigest"]).toBeUndefined();
+    expect(match["memberSeqs"]).toBeUndefined();
+    expect(match["subagentId"]).toBeUndefined();
+
+    // `show` is the recovery path: the digest the listings dropped is here.
+    const shown = await glia(["--json", "show", sessionId]);
+    const detail = (JSON.parse(shown.stdout) as { result: { session: Record<string, unknown> } })
+      .result.session;
+    expect(detail["revisionDigest"]).toMatch(/^[0-9a-f]{64}$/);
+    expect(detail["archiveState"]).toBe("active");
+  });
+
   test("JSON errors use the same single-document stdout contract with non-zero exit", async () => {
     const run = await glia(["--json", "show", "ses_00000000000000000000000000000000"]);
     expect(run.exitCode).not.toBe(0);
@@ -682,5 +722,9 @@ describe("compiled CLI contract", () => {
     const content = await Bun.file(join(home, ".claude", "skills", "glia", "SKILL.md")).text();
     expect(content).toContain("name: glia");
     expect(content).toContain(`glia_version: ${doc.result.version}`);
+    // The JSON omission rule is contract, not convention: the packaged
+    // skill document states it, so an agent consumer learns it up front.
+    expect(content).toContain("Absent means default");
+    expect(content).toContain("`show` is the full-fidelity surface");
   });
 });

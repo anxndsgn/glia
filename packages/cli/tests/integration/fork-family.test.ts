@@ -100,7 +100,8 @@ interface ListJson {
   sessions: {
     sessionId: string;
     eventCount: number;
-    family: { anchor: string; memberCount: number } | null;
+    /** Absent when the Session is in no family: a listing omits its defaults. */
+    family?: { anchor: string; memberCount: number };
   }[];
 }
 
@@ -187,7 +188,7 @@ describe("Session Fork Family", () => {
     const limited = await list({ limit: "1" });
     expect(limited.json.sessions).toHaveLength(1);
     expect(limited.json.sessions[0]!.sessionId).toBe(recId("window-newest"));
-    expect(limited.json.sessions[0]!.family).toBeNull();
+    expect(limited.json.sessions[0]!.family).toBeUndefined();
     expect(limited.human).not.toContain("(family");
   });
 
@@ -253,7 +254,7 @@ describe("Session Fork Family", () => {
     const soloRow = listed.json.sessions.find((r) => r.sessionId === recId("solo-1"))!;
     expect(anchorRow.family).toEqual({ anchor, memberCount: 2 });
     expect(otherRow.family).toEqual({ anchor, memberCount: 2 });
-    expect(soloRow.family).toBeNull();
+    expect(soloRow.family).toBeUndefined();
     const anchorLine = listed.human.split("\n").find((l) => l.trim().startsWith(anchor))!;
     const otherLine = listed.human.split("\n").find((l) => l.trim().startsWith(other))!;
     const soloLine = listed.human.split("\n").find((l) => l.trim().startsWith(recId("solo-1")))!;
@@ -364,7 +365,7 @@ describe("Session Fork Family", () => {
 
     const listed = await list();
     expect(listed.json.sessions.length).toBe(6);
-    expect(listed.json.sessions.every((r) => r.family === null)).toBeTrue();
+    expect(listed.json.sessions.every((r) => r.family === undefined)).toBeTrue();
     expect(listed.human).not.toContain("(family");
   });
 
@@ -395,7 +396,7 @@ describe("Session Fork Family", () => {
 
     const listed = await list();
     expect(listed.json.sessions.length).toBe(3);
-    expect(listed.json.sessions.every((r) => r.family === null)).toBeTrue();
+    expect(listed.json.sessions.every((r) => r.family === undefined)).toBeTrue();
     expect(listed.human).not.toContain("(family");
   });
 
@@ -660,7 +661,9 @@ describe("Session Fork Family", () => {
     expect(alone.human).not.toContain("(family");
     const aloneList = await list();
     expect(aloneList.json.sessions).toHaveLength(1);
-    expect(aloneList.json.sessions.find((r) => r.sessionId === recId("arc-b"))!.family).toBeNull();
+    expect(
+      aloneList.json.sessions.find((r) => r.sessionId === recId("arc-b"))!.family,
+    ).toBeUndefined();
   });
 
   test("deleting one member leaves the survivor with no family facts; the tombstone blocks re-import", async () => {
@@ -675,7 +678,7 @@ describe("Session Fork Family", () => {
 
     const listed = await list();
     const survivorRow = listed.json.sessions.find((r) => r.sessionId === survivor)!;
-    expect(survivorRow.family).toBeNull();
+    expect(survivorRow.family).toBeUndefined();
     expect(listed.human).not.toContain("(family");
     const result = await search(["DELPROBE"]);
     expect(result.json.totalMatches).toBe(1);
@@ -688,7 +691,7 @@ describe("Session Fork Family", () => {
     expect(reimport.tombstoned).toHaveLength(1);
     const relisted = await list();
     expect(relisted.json.sessions).toHaveLength(1);
-    expect(relisted.json.sessions[0]!.family).toBeNull();
+    expect(relisted.json.sessions[0]!.family).toBeUndefined();
   });
 
   test("accept and import state the overlap; dry-run and candidates stay silent", async () => {

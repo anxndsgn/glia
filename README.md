@@ -102,6 +102,15 @@ glia sync
 
 Session commands are flat: `import`, `candidates`, `accept`, `list`, `show`, `search`, `view`, `export`, `conflicts`, `resolve`, `delete`, `tombstones`, `archive`, and `unarchive`.
 
+In JSON, the listing and timeline verbs — `search`, `list`, and `view` — read
+as "absent means default": a per-item field holding its default value (null,
+an empty string, an unarchived Session, an inferred association, a zero count,
+a single-member sequence range) is omitted, and those verbs carry no per-item
+`revisionDigest`. Identity and citation — `sessionId`, `eventSeq`,
+`harnessId`, and the `locator` — always appear, the envelope and the `view`
+Session header are unchanged, and `show` remains the full-fidelity surface
+that emits every field.
+
 Machine setup commands are `setup`, `setup remove`, `hook install|remove`, and
 `skill install|remove`. Store commands are `sync`, `status`, and
 `store remote set|show`. Project Binding commands are `project list`, `project
