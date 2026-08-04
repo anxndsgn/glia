@@ -1,6 +1,7 @@
 import type { HarnessId } from "../harnesses/ids.ts";
 import type { CommandOutcome } from "../output/result.ts";
 import { confirmProceed } from "../output/confirm.ts";
+import { withProgress } from "../output/progress.ts";
 import { gliaHome } from "../project/paths.ts";
 import { loadProject } from "../project/load.ts";
 import { resolveWorktreeTopLevel } from "../project/resolve.ts";
@@ -17,9 +18,12 @@ import {
 export interface SetupCommandContext extends HookCommandContext {
   cwd: string;
   homeDir: string;
+  jsonMode: boolean;
   inputDisabled: boolean;
   /** Test seam for the optional backlog offer. */
   confirmImport?: (message: string) => Promise<boolean>;
+  /** Test seam for observing progress phase boundaries without drawing. */
+  progress?: typeof withProgress;
 }
 
 async function worktreeOrNull(cwd: string): Promise<string | null> {
@@ -31,23 +35,37 @@ async function worktreeOrNull(cwd: string): Promise<string | null> {
 }
 
 export async function runSetup(ctx: SetupCommandContext): Promise<CommandOutcome> {
-  const presence = new Map<HarnessId, boolean>();
-  for (const harnessId of ["codex", "claude-code"] as const) {
-    presence.set(harnessId, await harnessIsPresent(harnessId, ctx.env));
-  }
-  // Snapshot presence before installing ~/.claude/skills/glia, which must
-  // not manufacture a Claude Code installation on an otherwise absent machine.
-  const hooks = await runHookInstall(ctx, presence);
-  const skill = await runSkillInstall(
-    { cwd: ctx.cwd, homeDir: ctx.homeDir, inputDisabled: true },
-    {
-      global: true,
-      project: false,
-      claude: true,
-      agents: true,
-      target: null,
-      force: false,
+  const progress = ctx.progress ?? withProgress;
+  const hooks = await progress(
+    ctx,
+    "Installing SessionEnd hooks",
+    () => "SessionEnd hooks configured",
+    async () => {
+      const presence = new Map<HarnessId, boolean>();
+      for (const harnessId of ["codex", "claude-code"] as const) {
+        presence.set(harnessId, await harnessIsPresent(harnessId, ctx.env));
+      }
+      // Snapshot presence before installing ~/.claude/skills/glia, which must
+      // not manufacture a Claude Code installation on an otherwise absent machine.
+      return await runHookInstall(ctx, presence);
     },
+  );
+  const skill = await progress(
+    ctx,
+    "Installing Glia skill",
+    () => "Glia skill configured",
+    () =>
+      runSkillInstall(
+        { cwd: ctx.cwd, homeDir: ctx.homeDir, inputDisabled: true },
+        {
+          global: true,
+          project: false,
+          claude: true,
+          agents: true,
+          target: null,
+          force: false,
+        },
+      ),
   );
 
   const worktree = await worktreeOrNull(ctx.cwd);
@@ -59,12 +77,20 @@ export async function runSetup(ctx: SetupCommandContext): Promise<CommandOutcome
   } else if (worktree !== null) {
     const confirm = ctx.confirmImport ?? confirmProceed;
     if (await confirm("Import this repository's existing Session backlog now?")) {
-      const project = await loadProject(worktree, gliaHome(ctx.env));
-      importReport = await runImport(project, ctx.env, {
-        harness: null,
-        dryRun: false,
-        onlyCandidateIds: null,
-      });
+      importReport = await progress(
+        ctx,
+        "Importing existing Session backlog",
+        (report) =>
+          `Backlog import complete: ${report.accepted.length} accepted, ${report.unchanged} unchanged`,
+        async () => {
+          const project = await loadProject(worktree, gliaHome(ctx.env));
+          return await runImport(project, ctx.env, {
+            harness: null,
+            dryRun: false,
+            onlyCandidateIds: null,
+          });
+        },
+      );
     } else {
       backlogGuidance = "Backlog import skipped; run `glia import` here whenever you are ready.";
     }
