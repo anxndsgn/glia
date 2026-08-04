@@ -56,8 +56,16 @@ export const searchCommand: CommandDefinition = {
   projectAccess: "read",
   unenrolledRead: "empty",
   description: "search accepted Store evidence; never imports and never changes the Store",
-  arguments: [{ name: "[query]", description: "text query; every term matches as a substring" }],
+  arguments: [
+    { name: "[query]", description: "text query; every term matches as a substring (see --word)" },
+  ],
   options: [
+    {
+      flags: "--word",
+      description:
+        "match query terms only at word boundaries (ASCII letters, digits, _);" +
+        " term edges outside that alphabet, notably CJK, keep substring matching",
+    },
     {
       flags: "--file <path>",
       description: `restrict to Sessions with a matching File Touch; the value ${FILE_MATCH_RULE}`,
@@ -97,6 +105,10 @@ export const searchCommand: CommandDefinition = {
     if (query === null && file === null) {
       throw new GliaError("USAGE", "session search requires a text query, --file, or both");
     }
+    const word = options["word"] === true;
+    if (word && query === null) {
+      throw new GliaError("USAGE", "--word requires a text query");
+    }
     const filterValues = repeatedValues(options["filter"]);
     const context = nonNegativeInt(options["context"], "--context", 0);
     const params: SearchParams = {
@@ -109,9 +121,11 @@ export const searchCommand: CommandDefinition = {
       perSession: positiveInt(options["perSession"], "--per-session", DEFAULT_PER_SESSION),
       sort: parseSortMode(options["sort"]),
       includeArchived: options["includeArchived"] === true,
+      word,
     };
     const parameters = {
       query,
+      word,
       file,
       harness: params.harness,
       since: params.since,

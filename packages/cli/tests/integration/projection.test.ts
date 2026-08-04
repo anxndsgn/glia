@@ -282,6 +282,7 @@ function params(
     perSession: 3,
     sort: "relevance",
     includeArchived: false,
+    word: false,
     ...overrides,
   };
 }

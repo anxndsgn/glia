@@ -28,12 +28,14 @@ Glia captures complete coding-agent Sessions (Claude Code and Codex transcripts)
 
 ```sh
 glia --json search "authentication failure"          # text query; terms match as substrings
+glia --json search auth --word                       # whole words only: skips authored/authorization
 glia --json search --file session-layout.ts          # Sessions that touched a file
 glia --json search "retry" --filter toolcall --since 2026-07-01 -C 2
 ```
 
 Key options:
 
+- `--word`: terms match only at word boundaries (ASCII letters, digits, `_`), so a short term stops hitting every identifier containing it; CJK terms keep substring matching. Reach for it whenever a plain query drowns in token-family noise.
 - `--filter <value>` (repeatable, values union): `user`, `agent`, `toolcall`, `toolcall:<name>`, `toolresult`, `message`, `lifecycle`, `system`, `unknown`, `subagent`.
 - `--file <path>`: matches a touched path exactly, or as whole trailing path segments (`session-layout.ts` matches `src/storage/session-layout.ts`).
 - `--since <iso>`: events at or after an ISO 8601 date or timestamp.
