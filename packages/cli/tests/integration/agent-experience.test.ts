@@ -29,14 +29,17 @@ let ctx: CommandRunContext;
 const dupSessionId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "dup-main" });
 const sortNullSessionId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "sort-null" });
 
+// The listing and timeline verbs omit their defaults, so every field these
+// shapes mark optional is one whose absence carries meaning: a singleton
+// `memberSeqs`, an event with no text.
 interface SearchMatchJson {
   sessionId: string;
   eventSeq: number;
-  memberSeqs: number[];
+  memberSeqs?: number[];
   timestamp?: string | null;
   excerpt?: string;
   locator: EvidenceLocator;
-  context?: { seq: number; line: string; memberSeqs: number[]; locator: EvidenceLocator }[];
+  context?: { seq: number; line?: string; memberSeqs?: number[]; locator: EvidenceLocator }[];
 }
 
 interface SearchJson {
@@ -46,7 +49,7 @@ interface SearchJson {
 }
 
 interface ViewJson {
-  events: { seq: number; text: string; memberSeqs: number[] }[];
+  events: { seq: number; text?: string; memberSeqs?: number[] }[];
   totalEvents: number;
   maxSeq: number;
 }

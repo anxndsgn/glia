@@ -63,6 +63,16 @@ export function lineText(event: ViewEvent): string {
   return event.text === null ? "" : renderExcerpt(event.text, []);
 }
 
+/**
+ * The exhaustiveness guard the "absent means default" serializers stand on.
+ * A verb that omits defaults builds its per-item object by hand, so a column
+ * added to a projection row would otherwise vanish from that verb's output
+ * with nothing to notice. Each serializer destructures its row and passes
+ * the rest here: every field must have been named, so a new one fails the
+ * build until the verb decides whether to emit it.
+ */
+export function assertEveryFieldConsidered<T extends Record<string, never>>(_rest: T): void {}
+
 /** A collapsed duplicate run's member sequences, first through last. */
 export function seqRange(first: number, last: number): number[] {
   const seqs: number[] = [];

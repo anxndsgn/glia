@@ -175,11 +175,20 @@ function eventJsonPrefix(event: ViewEvent): object {
   };
 }
 
+/**
+ * A timeline event under "absent means default": the event's own sequence
+ * already states a singleton run, and an event with no text says nothing by
+ * carrying an empty one, so neither is emitted. The Session header above is
+ * once per invocation and stays whole.
+ */
 function timelineEventJson(event: ViewEvent): object {
+  const text = lineText(event);
   return {
     ...eventJsonPrefix(event),
-    text: lineText(event),
-    memberSeqs: seqRange(event.runFirstSeq, event.runLastSeq),
+    ...(text === "" ? {} : { text }),
+    ...(event.runLastSeq > event.runFirstSeq
+      ? { memberSeqs: seqRange(event.runFirstSeq, event.runLastSeq) }
+      : {}),
     locator: event.locator,
   };
 }

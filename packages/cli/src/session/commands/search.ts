@@ -3,6 +3,7 @@ import type { CommandOutcome } from "../../core/output/result.ts";
 import { GliaError } from "../../core/output/errors.ts";
 import {
   LABEL_WIDTH,
+  assertEveryFieldConsidered,
   lineText,
   nonNegativeInt,
   positiveInt,
@@ -24,6 +25,7 @@ import {
   type SearchParams,
   type SearchResult,
   type SearchSort,
+  type SubagentEvidence,
   type TextMatch,
   type ViewEvent,
 } from "../projection/query.ts";
@@ -133,7 +135,7 @@ export const searchCommand: CommandDefinition = {
             mode: "text",
             totalMatches: result.totalMatches,
             familyCollapsedMatches: result.familyCollapsedMatches,
-            matches: flattenGroups(result.groups, contexts),
+            matches: flattenGroups(result.groups, contexts, textMatchJson),
             parameters,
             projection,
           },
@@ -148,7 +150,7 @@ export const searchCommand: CommandDefinition = {
           mode: "file_touches",
           totalMatches: result.totalMatches,
           familyCollapsedMatches: result.familyCollapsedMatches,
-          matches: flattenGroups(result.groups, contexts),
+          matches: flattenGroups(result.groups, contexts, fileTouchMatchJson),
           parameters,
           projection,
         },
@@ -272,10 +274,22 @@ function computeContexts<M extends { eventSeq: number }>(
   return contexts;
 }
 
-/** The JSON match array: display order, Session identity on every match. */
+/**
+ * The JSON match array: display order, Session identity on every match.
+ *
+ * Identity and citation are exempt from the omission rule — `sessionId`,
+ * `eventSeq`, `harnessId`, and `locator` are what make a flat match
+ * self-describing, so they appear whatever their value. Everything else
+ * follows "absent means default": a default-valued field (null, the empty
+ * string, `archiveState: "active"`, a singleton `memberSeqs`) is omitted
+ * from these per-match objects, whose count scales with `--limit`. The
+ * per-Session `revisionDigest` leaves entirely; its homes are `show`,
+ * `conflicts`, and the once-per-document `view` Session header.
+ */
 function flattenGroups<M extends { eventSeq: number; runLastSeq: number }>(
   groups: SessionMatchGroup<M>[],
   contexts: Map<string, GroupContext>,
+  matchJson: (match: M) => object,
 ): object[] {
   const flat: object[] = [];
   for (const group of groups) {
@@ -283,32 +297,110 @@ function flattenGroups<M extends { eventSeq: number; runLastSeq: number }>(
     const bySeq = new Map<number, ViewEvent>();
     for (const event of groupContext?.events ?? []) bySeq.set(event.seq, event);
     for (const match of group.matches) {
-      const { runLastSeq, ...fields } = match;
       const contextSeqs = groupContext?.perMatch.get(match.eventSeq);
       flat.push({
         sessionId: group.sessionId,
-        revisionDigest: group.revisionDigest,
         harnessId: group.harnessId,
-        archiveState: group.archiveState,
-        ...fields,
-        memberSeqs: seqRange(match.eventSeq, match.runLastSeq),
+        ...(group.archiveState === "archived" ? { archiveState: group.archiveState } : {}),
+        ...matchJson(match),
+        ...memberSeqsJson(match.eventSeq, match.runLastSeq),
         ...(contextSeqs
           ? {
               context: contextSeqs
                 .map((seq) => bySeq.get(seq))
                 .filter((e): e is ViewEvent => e !== undefined)
-                .map((e) => ({
-                  seq: e.seq,
-                  line: lineText(e),
-                  memberSeqs: seqRange(e.runFirstSeq, e.runLastSeq),
-                  locator: e.locator,
-                })),
+                .map((e) => contextEntryJson(e)),
             }
           : {}),
       });
     }
   }
   return flat;
+}
+
+/** A collapsed run states its members; a singleton says it with `eventSeq`. */
+function memberSeqsJson(firstSeq: number, lastSeq: number): object {
+  return lastSeq > firstSeq ? { memberSeqs: seqRange(firstSeq, lastSeq) } : {};
+}
+
+/**
+ * What an event says about the subagent that produced it. A match from the
+ * parent's own transcript states nothing, so it carries neither field.
+ */
+function subagentEvidenceJson(evidence: SubagentEvidence): object {
+  return {
+    ...(evidence.subagentId !== null ? { subagentId: evidence.subagentId } : {}),
+    ...(evidence.subagentType !== null ? { subagentType: evidence.subagentType } : {}),
+  };
+}
+
+/**
+ * Both match serializers destructure their match rather than reading it
+ * field by field, so a field added to the query result fails the build here
+ * instead of silently missing the match objects. `runLastSeq` is the one
+ * field with no key of its own: it is what `memberSeqs` is derived from.
+ */
+function textMatchJson(match: TextMatch): object {
+  const {
+    eventSeq,
+    runLastSeq: _runLastSeq,
+    eventKind,
+    role,
+    timestamp,
+    excerpt,
+    locator,
+    subagentId,
+    subagentType,
+    alsoIn,
+    ...unconsidered
+  } = match;
+  assertEveryFieldConsidered(unconsidered);
+  return {
+    eventSeq,
+    eventKind,
+    ...(role !== null ? { role } : {}),
+    timestamp,
+    excerpt,
+    locator,
+    ...subagentEvidenceJson({ subagentId, subagentType }),
+    ...(alsoIn ? { alsoIn } : {}),
+  };
+}
+
+function fileTouchMatchJson(match: FileTouchMatch): object {
+  const {
+    eventSeq,
+    runLastSeq: _runLastSeq,
+    operation,
+    sourcePath,
+    normalizedPath,
+    locator,
+    subagentId,
+    subagentType,
+    alsoIn,
+    ...unconsidered
+  } = match;
+  assertEveryFieldConsidered(unconsidered);
+  return {
+    eventSeq,
+    operation,
+    sourcePath,
+    ...(normalizedPath !== null ? { normalizedPath } : {}),
+    locator,
+    ...subagentEvidenceJson({ subagentId, subagentType }),
+    ...(alsoIn ? { alsoIn } : {}),
+  };
+}
+
+/** A `-C` context entry follows the same rule as the match it accompanies. */
+function contextEntryJson(event: ViewEvent): object {
+  const line = lineText(event);
+  return {
+    seq: event.seq,
+    ...(line === "" ? {} : { line }),
+    ...memberSeqsJson(event.runFirstSeq, event.runLastSeq),
+    locator: event.locator,
+  };
 }
 
 /** Speaker and event labels use the `--filter` vocabulary. */

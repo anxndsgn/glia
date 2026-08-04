@@ -1,6 +1,6 @@
 import type { CommandDefinition } from "../../core/session-module.ts";
 import type { CommandOutcome } from "../../core/output/result.ts";
-import { positiveIntOrNull } from "./shared.ts";
+import { assertEveryFieldConsidered, positiveIntOrNull } from "./shared.ts";
 import { ensureProjection } from "../projection/publish.ts";
 import { listSessions, openProjection, type SessionRow } from "../projection/query.ts";
 import { listFamilyRows, visibleFamilyFacts, type FamilyFacts } from "../projection/family.ts";
@@ -55,10 +55,9 @@ export const listCommand: CommandDefinition = {
       return {
         json: {
           totalSessions: sessions.length,
-          sessions: shown.map((session) => ({
-            ...session,
-            family: families.get(session.sessionId) ?? null,
-          })),
+          sessions: shown.map((session) =>
+            sessionEntryJson(session, families.get(session.sessionId) ?? null),
+          ),
           parameters: { limit, includeArchived },
           projection: { storeCommit: handle.storeCommit, stale: handle.stale },
         },
@@ -69,6 +68,68 @@ export const listCommand: CommandDefinition = {
     }
   },
 };
+
+/**
+ * One listed Session, under "absent means default": identity, size, and
+ * timestamps appear on every entry whatever their value, and every other
+ * field is emitted only when it says something — a non-null value, an
+ * archived Session, an explicit association, a subagent fact. The
+ * `revisionDigest` leaves the listing entirely; `show` is the
+ * full-fidelity surface that still carries it.
+ *
+ * The row is destructured rather than read field by field so a column added
+ * to `SessionRow` fails the build here instead of silently missing the
+ * listing.
+ */
+function sessionEntryJson(session: SessionRow, family: FamilyFacts | null): object {
+  const {
+    sessionId,
+    harnessId,
+    sourceSessionId,
+    openingPath,
+    associationMode,
+    continuationParent,
+    // The listing's one unconditional omission: recoverable from `show`.
+    revisionDigest: _revisionDigest,
+    acceptedAt,
+    archiveState,
+    eventCount,
+    firstTimestamp,
+    lastTimestamp,
+    label,
+    labelSource,
+    labelSeq,
+    subagentOrigin,
+    subagentKind,
+    subagentParent,
+    subagentParentSession,
+    subagentCount,
+    ...unconsidered
+  } = session;
+  assertEveryFieldConsidered(unconsidered);
+  return {
+    sessionId,
+    harnessId,
+    sourceSessionId,
+    ...(openingPath !== null ? { openingPath } : {}),
+    ...(associationMode !== "inferred" ? { associationMode } : {}),
+    ...(continuationParent !== null ? { continuationParent } : {}),
+    acceptedAt,
+    ...(archiveState !== "active" ? { archiveState } : {}),
+    eventCount,
+    firstTimestamp,
+    lastTimestamp,
+    ...(label !== null ? { label } : {}),
+    ...(labelSource !== null ? { labelSource } : {}),
+    ...(labelSeq !== null ? { labelSeq } : {}),
+    ...(subagentOrigin !== 0 ? { subagentOrigin } : {}),
+    ...(subagentKind !== null ? { subagentKind } : {}),
+    ...(subagentParent !== null ? { subagentParent } : {}),
+    ...(subagentParentSession !== null ? { subagentParentSession } : {}),
+    ...(subagentCount !== 0 ? { subagentCount } : {}),
+    ...(family !== null ? { family } : {}),
+  };
+}
 
 /**
  * The listing reads as dated groups: one header per run of Sessions that
