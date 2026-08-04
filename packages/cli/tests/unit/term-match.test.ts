@@ -42,6 +42,19 @@ describe("termOccurrences word mode", () => {
   });
 });
 
+describe("termOccurrences Unicode case folding", () => {
+  test("a length-changing fold keeps coordinates in the original text", () => {
+    // "İ".toLowerCase() is "i̇" (two UTF-16 units); folding must never
+    // shift ranges off the original string.
+    expect(termOccurrences("İauth", "auth", true)).toEqual([{ start: 1, end: 5 }]);
+    expect(termOccurrences("İİ auth", "auth", false)).toEqual([{ start: 3, end: 7 }]);
+  });
+
+  test("a non-ASCII term edge keeps substring semantics even when it folds toward ASCII", () => {
+    expect(termOccurrences("xİy", "İ", true)).toEqual([{ start: 1, end: 2 }]);
+  });
+});
+
 describe("matchesEveryTerm", () => {
   test("requires every term under the given mode", () => {
     expect(matchesEveryTerm("auth failed while authoring", ["auth", "authoring"], true)).toBe(true);

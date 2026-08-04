@@ -209,6 +209,30 @@ beforeAll(async () => {
     ],
   });
 
+  // Word-mode relevance: the noisy line carries one whole-word occurrence
+  // plus many embedded ones (bm25 scores every substring, so it wins the
+  // plain ranking); the clean line carries three whole-word occurrences
+  // and must outrank it under --word.
+  await writeClaudeSession(env.claudeHome, {
+    sessionId: "search-word-noise",
+    cwd,
+    extraLines: [
+      claudeUserLine(
+        "search-word-noise",
+        cwd,
+        "2026-07-15T16:05:00Z",
+        "wrbase wrbased wrbased wrbased wrbased wrbased wrbased wrbased",
+      ),
+    ],
+  });
+  await writeClaudeSession(env.claudeHome, {
+    sessionId: "search-word-clean",
+    cwd,
+    extraLines: [
+      claudeUserLine("search-word-clean", cwd, "2026-07-15T16:06:00Z", "wrbase wrbase wrbase"),
+    ],
+  });
+
   // Codex: built-in shell attested as "shell", patching as "apply_patch".
   await writeCodexSession(env.codexHome, {
     sessionId: "11111111-2222-3333-4444-555555555555",
@@ -373,6 +397,17 @@ describe("session search --word", () => {
     const { json } = await run(["投影"], { word: true });
     expect(json.totalMatches).toBe(1);
     expect(json.matches[0]!.excerpt).toContain("重建«投影»缓存");
+  });
+
+  test("--word relevance ranks by word-bounded occurrences, not raw bm25", async () => {
+    // Plain relevance rewards the substring noise --word exists to suppress…
+    const plain = await run(["wrbase"], { limit: "1" });
+    expect(plain.json.matches[0]!.excerpt).toContain("«wrbase»d");
+    // …word mode re-ranks from word-bounded occurrences, so the line with
+    // three whole words beats the one whole word among eight embedded hits.
+    const { json } = await run(["wrbase"], { word: true, limit: "1" });
+    expect(json.totalMatches).toBe(2);
+    expect(json.matches[0]!.excerpt).toBe("«wrbase» «wrbase» «wrbase»");
   });
 
   test("--word without a text query is a USAGE error", async () => {
