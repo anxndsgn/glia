@@ -29,6 +29,7 @@ function setupContext(overrides: Partial<SetupCommandContext> = {}): SetupComman
     homeDir: userHome,
     env: env.env,
     executablePath: "/opt/glia/bin/glia",
+    jsonMode: false,
     inputDisabled: true,
     ...overrides,
   };
@@ -210,13 +211,30 @@ describe("setup umbrella", () => {
   test("interactive consent imports the current repository backlog and creates its Binding", async () => {
     await mkdir(env.claudeHome, { recursive: true });
     await writeClaudeSession(env.claudeHome, { sessionId: "setup-backlog", cwd: env.worktree });
+    const phases: { message: string; done: string }[] = [];
     const outcome = await runSetup(
-      setupContext({ inputDisabled: false, confirmImport: async () => true }),
+      setupContext({
+        inputDisabled: false,
+        confirmImport: async () => true,
+        progress: async (_ctx, message, done, step) => {
+          const result = await step();
+          phases.push({ message, done: done(result) });
+          return result;
+        },
+      }),
     );
     const backlog = (outcome.json as { backlog: { imported: { accepted: unknown[] } } }).backlog;
     expect(backlog.imported.accepted).toHaveLength(1);
     const projects = await readdir(join(env.home, "projects"));
     expect(projects).toHaveLength(1);
     expect(await listSessionIds(projectPaths(env.home, projects[0]!).storeDir)).toHaveLength(1);
+    expect(phases).toEqual([
+      { message: "Installing SessionEnd hooks", done: "SessionEnd hooks configured" },
+      { message: "Installing Glia skill", done: "Glia skill configured" },
+      {
+        message: "Importing existing Session backlog",
+        done: "Backlog import complete: 1 accepted, 0 unchanged",
+      },
+    ]);
   });
 });
