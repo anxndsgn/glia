@@ -184,6 +184,55 @@ beforeAll(async () => {
     ),
   });
 
+  // Word-boundary fixtures: one standalone occurrence, one embedded-only
+  // line (camelCase and underscores), one CJK-bounded occurrence, and the
+  // same shapes for a short (scan-path) term.
+  await writeClaudeSession(env.claudeHome, {
+    sessionId: "search-word",
+    cwd,
+    extraLines: [
+      claudeUserLine(
+        "search-word",
+        cwd,
+        "2026-07-15T16:00:00Z",
+        "wbtok stands beside wbtokenized text",
+      ),
+      claudeUserLine(
+        "search-word",
+        cwd,
+        "2026-07-15T16:01:00Z",
+        "sourceWbtokMessages and pre_wbtok_post drift",
+      ),
+      claudeUserLine("search-word", cwd, "2026-07-15T16:02:00Z", "重建wbtok索引"),
+      claudeUserLine("search-word", cwd, "2026-07-15T16:03:00Z", "short qx stands alone"),
+      claudeUserLine("search-word", cwd, "2026-07-15T16:04:00Z", "embedded aqxb only"),
+    ],
+  });
+
+  // Word-mode relevance: the noisy line carries one whole-word occurrence
+  // plus many embedded ones (bm25 scores every substring, so it wins the
+  // plain ranking); the clean line carries three whole-word occurrences
+  // and must outrank it under --word.
+  await writeClaudeSession(env.claudeHome, {
+    sessionId: "search-word-noise",
+    cwd,
+    extraLines: [
+      claudeUserLine(
+        "search-word-noise",
+        cwd,
+        "2026-07-15T16:05:00Z",
+        "wrbase wrbased wrbased wrbased wrbased wrbased wrbased wrbased",
+      ),
+    ],
+  });
+  await writeClaudeSession(env.claudeHome, {
+    sessionId: "search-word-clean",
+    cwd,
+    extraLines: [
+      claudeUserLine("search-word-clean", cwd, "2026-07-15T16:06:00Z", "wrbase wrbase wrbase"),
+    ],
+  });
+
   // Codex: built-in shell attested as "shell", patching as "apply_patch".
   await writeCodexSession(env.codexHome, {
     sessionId: "11111111-2222-3333-4444-555555555555",
@@ -320,6 +369,52 @@ describe("session search output", () => {
     expect(json.parameters["perSession"]).toBe(2);
     expect(json.matches[0]!.role).toBe("user");
     expect(json.matches[0]!.timestamp).toMatch(/^2026-07-15T/);
+  });
+});
+
+describe("session search --word", () => {
+  test("--word keeps only word-bounded matches on the index path", async () => {
+    const plain = await run(["wbtok"]);
+    expect(plain.json.totalMatches).toBe(3);
+    const { json } = await run(["wbtok"], { word: true });
+    expect(json.totalMatches).toBe(2);
+    expect(json.parameters["word"]).toBe(true);
+    const excerpts = json.matches.map((m) => m.excerpt!).sort();
+    // The excerpt marks only the word-bounded occurrence, and CJK
+    // neighbors bound a Latin term.
+    expect(excerpts).toEqual(["«wbtok» stands beside wbtokenized text", "重建«wbtok»索引"]);
+  });
+
+  test("--word applies to short terms on the scan path", async () => {
+    const plain = await run(["qx"]);
+    expect(plain.json.totalMatches).toBe(2);
+    const { json } = await run(["qx"], { word: true });
+    expect(json.totalMatches).toBe(1);
+    expect(json.matches[0]!.excerpt).toBe("short «qx» stands alone");
+  });
+
+  test("a CJK term keeps substring matching under --word", async () => {
+    const { json } = await run(["投影"], { word: true });
+    expect(json.totalMatches).toBe(1);
+    expect(json.matches[0]!.excerpt).toContain("重建«投影»缓存");
+  });
+
+  test("--word relevance ranks by word-bounded occurrences, not raw bm25", async () => {
+    // Plain relevance rewards the substring noise --word exists to suppress…
+    const plain = await run(["wrbase"], { limit: "1" });
+    expect(plain.json.matches[0]!.excerpt).toContain("«wrbase»d");
+    // …word mode re-ranks from word-bounded occurrences, so the line with
+    // three whole words beats the one whole word among eight embedded hits.
+    const { json } = await run(["wrbase"], { word: true, limit: "1" });
+    expect(json.totalMatches).toBe(2);
+    expect(json.matches[0]!.excerpt).toBe("«wrbase» «wrbase» «wrbase»");
+  });
+
+  test("--word without a text query is a USAGE error", async () => {
+    await expect(run([], { file: "tests/auth.test.ts", word: true })).rejects.toMatchObject({
+      code: "USAGE",
+      message: expect.stringContaining("--word requires a text query"),
+    });
   });
 });
 

@@ -6,6 +6,7 @@
  * exact bytes come from the evidence locator.
  */
 import { oneLine } from "../../core/output/terminal.ts";
+import { termOccurrences, type TermRange } from "./term-match.ts";
 
 /** Bounded excerpt width in UTF-16 code units, before the ellipses. */
 export const EXCERPT_MAX_WIDTH = 120;
@@ -17,20 +18,18 @@ const ELLIPSIS = "…";
 const MARK_OPEN = "«";
 const MARK_CLOSE = "»";
 
-interface Range {
-  start: number;
-  end: number;
-}
+type Range = TermRange;
 
 /**
  * Renders one single-line excerpt: source whitespace runs (including
  * newlines) collapse to single spaces, every matched term inside the
  * window is marked with `«»`, and the result is truncated with ellipses
- * to a bounded width around the first match.
+ * to a bounded width around the first match. In word mode only
+ * word-bounded occurrences are marked, matching what word search kept.
  */
-export function renderExcerpt(text: string, terms: string[]): string {
+export function renderExcerpt(text: string, terms: string[], word = false): string {
   const collapsed = oneLine(text);
-  const ranges = mergeRanges(findTermRanges(collapsed, terms));
+  const ranges = mergeRanges(findTermRanges(collapsed, terms, word));
   const window = pickWindow(collapsed, ranges);
   let out = "";
   let cursor = window.start;
@@ -48,21 +47,8 @@ export function renderExcerpt(text: string, terms: string[]): string {
 }
 
 /** Case-insensitive literal occurrences of every term, as index ranges. */
-function findTermRanges(collapsed: string, terms: string[]): Range[] {
-  const haystack = collapsed.toLowerCase();
-  const ranges: Range[] = [];
-  for (const term of terms) {
-    const needle = term.toLowerCase();
-    if (needle.length === 0) continue;
-    let from = 0;
-    while (true) {
-      const at = haystack.indexOf(needle, from);
-      if (at === -1) break;
-      ranges.push({ start: at, end: at + needle.length });
-      from = at + 1;
-    }
-  }
-  return ranges;
+function findTermRanges(collapsed: string, terms: string[], word: boolean): Range[] {
+  return terms.flatMap((term) => termOccurrences(collapsed, term, word));
 }
 
 function mergeRanges(ranges: Range[]): Range[] {

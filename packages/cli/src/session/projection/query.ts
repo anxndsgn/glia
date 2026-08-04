@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { GliaError } from "../../core/output/errors.ts";
 import { renderExcerpt } from "./excerpt.ts";
+import { termOccurrences } from "./term-match.ts";
 import {
   chooseAnchor,
   compareByTimestampThenId,
@@ -105,6 +106,8 @@ export interface SearchParams {
   perSession: number;
   sort: SearchSort;
   includeArchived: boolean;
+  /** Word mode: term edges that are ASCII word characters must fall on word boundaries. */
+  word: boolean;
 }
 
 export interface TextMatch extends SubagentEvidence {
@@ -684,14 +687,14 @@ export function searchText(db: Database, params: SearchParams): SearchResult<Tex
     eventKind: row.eventKind,
     role: row.role,
     timestamp: row.timestamp,
-    excerpt: renderExcerpt(row.text, terms),
+    excerpt: renderExcerpt(row.text, terms, params.word),
     locator: locatorOf(row),
     subagentType: row.subagentType,
     subagentId: row.subagentId,
   });
 
   const familyRows = listFamilyRows(db);
-  if (familyRows.length === 0) {
+  if (familyRows.length === 0 && !params.word) {
     const total = db.query(`SELECT COUNT(*) AS n ${from} WHERE ${where}`).get(bind as never) as {
       n: number;
     };
@@ -702,7 +705,20 @@ export function searchText(db: Database, params: SearchParams): SearchResult<Tex
     } as never) as (TextMatchRow & BoundedMatchedRow)[];
     return finishBoundedSearch(rows, total.n, shape);
   }
-  const rows = db.query(uncappedQuery(matchedCte)).all(bind as never) as TextMatchRow[];
+  // SQL guarantees every candidate contains each term as a substring; word
+  // mode re-checks boundaries in JS, so counts and windows must come from
+  // finishSearch over the whole matched set rather than the SQL fast path.
+  // bm25 also scored the embedded occurrences word mode discards, so
+  // surviving rows re-rank by word-bounded occurrence count; the recency
+  // rank stays when no term was index-servable.
+  let rows = db.query(uncappedQuery(matchedCte)).all(bind as never) as TextMatchRow[];
+  if (params.word) {
+    rows = rows.flatMap((row) => {
+      const counts = terms.map((term) => termOccurrences(row.text, term, true).length);
+      if (counts.includes(0)) return [];
+      return ranked ? [{ ...row, rank: -counts.reduce((a, b) => a + b, 0) }] : [row];
+    });
+  }
   return finishSearch(familyRows, rows, params, shape);
 }
 
