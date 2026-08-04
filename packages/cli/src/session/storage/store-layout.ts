@@ -4,6 +4,7 @@ import type { BundleManifest, StoredSourceBundle, SubagentOrigin } from "../adap
 import type { HarnessId } from "../../core/harnesses/ids.ts";
 import { GliaError } from "../../core/output/errors.ts";
 import { requireSupportedSchemaVersion } from "../../core/state/schema-version.ts";
+import { gitOrThrow } from "../../core/store/git.ts";
 
 /**
  * Bumped to 2 when Sessions gained subagent evidence. The read side alone
@@ -93,6 +94,20 @@ export async function listSessionIds(storeDir: string): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/** Counts Sessions from the published Store Revision, never its in-flight working tree. */
+export async function countSessionsAtHead(storeDir: string): Promise<number> {
+  const paths = await gitOrThrow(
+    ["ls-tree", "-r", "--name-only", "HEAD", "--", "session/sessions"],
+    storeDir,
+  );
+  const sessionIds = new Set<string>();
+  for (const path of paths.split("\n")) {
+    const match = /^session\/sessions\/([^/]+)\//.exec(path);
+    if (match?.[1]) sessionIds.add(match[1]);
+  }
+  return sessionIds.size;
 }
 
 /**

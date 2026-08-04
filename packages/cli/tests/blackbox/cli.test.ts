@@ -18,6 +18,7 @@ import {
   FAKE_KEY,
   makeBareRemote,
   makeSecondReplica,
+  makeSecondWorktree,
   makeTestEnv,
   writeClaudeSession,
   type ReplicaEnv,
@@ -86,6 +87,41 @@ afterAll(async () => {
 });
 
 describe("compiled CLI contract", () => {
+  test("project inventory is machine-scoped and lifecycle verbs keep the JSON contract", async () => {
+    const outside = join(env.root, "outside");
+    await mkdir(outside);
+    const empty = await glia(["--json", "project", "list"], outside);
+    expect(empty.exitCode).toBe(0);
+    expect(JSON.parse(empty.stdout)).toMatchObject({
+      formatVersion: 1,
+      command: "project.list",
+      ok: true,
+      result: { projects: [] },
+    });
+
+    const status = await glia(["--json", "status"]);
+    const projectId = (JSON.parse(status.stdout) as { result: { projectId: string } }).result
+      .projectId;
+    const retired = await makeSecondWorktree(env, "retired");
+    const bound = await glia(["--json", "project", "bind", projectId, retired, "--alias"]);
+    expect(bound.exitCode).toBe(0);
+    expect(JSON.parse(bound.stdout)).toMatchObject({
+      command: "project.bind",
+      ok: true,
+      result: { projectId, path: retired, kind: "alias", changed: true },
+    });
+
+    const forgotten = await glia(["--json", "project", "forget", retired], outside);
+    expect(forgotten.exitCode).toBe(0);
+    expect(JSON.parse(forgotten.stdout)).toMatchObject({
+      command: "project.forget",
+      ok: true,
+      result: { projectId, path: retired, removedFrom: "alias" },
+    });
+    expect(bound.stdout.trim().split("\n")).toHaveLength(1);
+    expect(forgotten.stdout.trim().split("\n")).toHaveLength(1);
+  });
+
   test("--json with hook mode is an explicit usage error", async () => {
     env.env["GLIA_HOOK_FOREGROUND"] = "1";
     const run = await glia(["--json", "import", "--hook"]);

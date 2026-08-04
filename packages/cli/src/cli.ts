@@ -23,6 +23,13 @@ import { runHookInvocation } from "./session/commands/hook-import.ts";
 import { currentSelfCommand, hookExecutablePath } from "./session/commands/hook-import.ts";
 import { runHookInstall, runHookRemove } from "./core/commands/hook.ts";
 import { runSetup, runSetupRemove } from "./core/commands/setup.ts";
+import {
+  projectCommandDefinitions,
+  runProjectBind,
+  runProjectForget,
+  runProjectList,
+  type MachineCommandContext,
+} from "./core/commands/project.ts";
 
 const target: RenderTarget = {
   stdout: (text) => process.stdout.write(text),
@@ -48,6 +55,17 @@ function globalFlags(): GlobalFlags {
   const jsonMode = opts.json === true;
   const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
   return { jsonMode, inputDisabled: opts.input === false || jsonMode || !tty };
+}
+
+function machineContext(flags: GlobalFlags): MachineCommandContext {
+  return {
+    requirement: "machine",
+    cwd: process.cwd(),
+    home: gliaHome(),
+    env: Bun.env,
+    jsonMode: flags.jsonMode,
+    inputDisabled: flags.inputDisabled,
+  };
 }
 
 async function execute(
@@ -346,6 +364,32 @@ program
       );
     });
   });
+
+const project = program.command("project").description("inspect and manage Project Bindings");
+for (const definition of projectCommandDefinitions) {
+  const command = project.command(definition.name).description(definition.description);
+  if (definition.name === "forget") command.argument("<path>", "bound root or alias to remove");
+  if (definition.name === "bind") {
+    command
+      .argument("<project-id>", "existing machine-local Project ID")
+      .argument("[path]", "path to bind (defaults to the current Git worktree)")
+      .option("--alias", "claim historical Sessions without enabling hook capture");
+  }
+  command.action(async (...invocation: unknown[]) => {
+    await execute(`project.${definition.name}`, async (flags) => {
+      const ctx = machineContext(flags);
+      if (definition.name === "list") return await runProjectList(ctx);
+      if (definition.name === "forget") return await runProjectForget(ctx, String(invocation[0]));
+      const options = invocation[invocation.length - 2] as { alias?: boolean };
+      return await runProjectBind(
+        ctx,
+        String(invocation[0]),
+        invocation[1] === undefined ? undefined : String(invocation[1]),
+        options.alias === true,
+      );
+    });
+  });
+}
 
 const argv = process.argv.slice(2);
 if (argv.includes("--version") || argv.includes("-V")) {

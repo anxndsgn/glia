@@ -55,6 +55,20 @@ inside a repository that has never opted in are quiet no-ops. Use `glia status`
 to inspect both machine-global hook liveness and the latest hook import for the
 current Project.
 
+Inspect and manage machine-local Bindings from any directory:
+
+```sh
+glia project list
+glia project forget <path>
+glia project bind <project-id> [path]
+glia project bind <project-id> <historical-path> --alias
+```
+
+`project forget` removes only the Binding; its Store and Sessions remain. A root
+enables SessionEnd capture, while an alias claims historical Sessions without
+enabling capture at that path. Use `project list` to find rootless Projects,
+missing checkout paths, and Stores that have not yet been synced locally.
+
 If a search returns no matches, its human output and JSON `advisories` report
 non-zero importable, pending, and withheld Candidate counts. A search with
 results does not run discovery.
@@ -74,7 +88,8 @@ Session commands are flat: `import`, `candidates`, `accept`, `list`, `show`, `se
 
 Machine setup commands are `setup`, `setup remove`, `hook install|remove`, and
 `skill install|remove`. Store commands are `sync`, `status`, and
-`store remote set|show`. Every command supports the global `--json` and
+`store remote set|show`. Project Binding commands are `project list`, `project
+forget`, and `project bind`. Every command supports the global `--json` and
 `--no-input` flags, except the deliberately silent `import --hook` path, which
 rejects `--json`.
 
