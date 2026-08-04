@@ -96,6 +96,35 @@ describe("hook config merge", () => {
     expect(await readFile(path, "utf8")).toBe(before);
   });
 
+  test("a foreign import --hook command is never treated as glia-managed", async () => {
+    await mkdir(env.codexHome, { recursive: true });
+    const path = join(env.codexHome, "hooks.json");
+    const foreign =
+      '{"hooks":[{"type":"command","command":"\'/opt/acme\' import --hook","timeout":1}]}';
+    const original = `{
+  "hooks": {
+    "SessionEnd": [
+      ${foreign}
+    ]
+  }
+}
+`;
+    await writeFile(path, original, "utf8");
+
+    expect((await removeHookConfig("codex", env.env)).status).toBe("not_installed");
+    expect(await readFile(path, "utf8")).toBe(original);
+
+    expect((await installHookConfig("codex", env.env, "/new/glia")).status).toBe("updated");
+    const installed = await readFile(path, "utf8");
+    expect(installed).toContain(foreign);
+    expect(installed).toContain("'/new/glia' import --hook");
+
+    expect((await removeHookConfig("codex", env.env)).status).toBe("removed");
+    const removed = await readFile(path, "utf8");
+    expect(removed).toContain(foreign);
+    expect(removed).not.toContain("'/new/glia' import --hook");
+  });
+
   test("removal deletes an exact managed entry but preserves an edited sibling", async () => {
     await mkdir(env.codexHome, { recursive: true });
     const path = join(env.codexHome, "hooks.json");

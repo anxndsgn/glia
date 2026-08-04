@@ -1,5 +1,5 @@
 import { lstat, readFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, normalize, sep } from "node:path";
 import type { HarnessId } from "../harnesses/ids.ts";
 import { harnessHome } from "../harnesses/home.ts";
 import { GliaError } from "../output/errors.ts";
@@ -41,13 +41,38 @@ export function hookCommand(commandPrefix: string | readonly string[]): string {
   return `${prefix.map(quoteHookExecutable).join(" ")} import --hook`;
 }
 
-function commandExecutables(command: string): string[] | null {
-  if (!command.endsWith(" import --hook")) return null;
-  const encoded = command.slice(0, -" import --hook".length);
+function quotedAbsolutePaths(encoded: string): string[] | null {
   const tokens = encoded.match(/'(?:[^']|'"'"')*'/g);
   if (tokens === null || tokens.join(" ") !== encoded) return null;
   const paths = tokens.map((token) => token.slice(1, -1).replaceAll(`'"'"'`, "'"));
   return paths.length > 0 && paths.every(isAbsolute) ? paths : null;
+}
+
+function isGliaCommandPrefix(paths: readonly string[]): boolean {
+  if (paths.length === 1) {
+    const executable = basename(paths[0]!);
+    return executable === "glia" || executable === "glia.exe";
+  }
+  if (paths.length !== 2) return false;
+  const runtime = basename(paths[0]!);
+  if (runtime !== "bun" && !runtime.startsWith("bun-")) return false;
+  const script = normalize(paths[1]!);
+  return ["cli.ts", "cli.js"].some((name) =>
+    script.endsWith(`${sep}${join("packages", "cli", "src", name)}`),
+  );
+}
+
+function commandExecutables(command: string): string[] | null {
+  if (!command.endsWith(" import --hook")) return null;
+  return quotedAbsolutePaths(command.slice(0, -" import --hook".length));
+}
+
+function isPotentialEditedGliaCommand(command: string): boolean {
+  const invocation = /(?:^|\s)import\s+--hook(?:\s|$)/.exec(command);
+  if (invocation === null) return false;
+  const prefix = command.slice(0, invocation.index).trimEnd();
+  const paths = quotedAbsolutePaths(prefix);
+  return paths !== null && isGliaCommandPrefix(paths);
 }
 
 function hookGroup(commandPrefix: string | readonly string[]): object {
@@ -73,12 +98,12 @@ export function isManagedHookGroup(value: unknown): boolean {
   const handler = object(hooks[0]);
   if (handler === null) return false;
   if (Object.keys(handler).sort().join(",") !== "command,timeout,type") return false;
-  return (
-    handler["type"] === "command" &&
-    handler["timeout"] === 1 &&
-    typeof handler["command"] === "string" &&
-    commandExecutables(handler["command"]) !== null
-  );
+  const command = handler["command"];
+  if (handler["type"] !== "command" || handler["timeout"] !== 1 || typeof command !== "string") {
+    return false;
+  }
+  const paths = commandExecutables(command);
+  return paths !== null && isGliaCommandPrefix(paths);
 }
 
 function isPotentialEditedGliaGroup(value: unknown): boolean {
@@ -87,7 +112,7 @@ function isPotentialEditedGliaGroup(value: unknown): boolean {
   if (!Array.isArray(hooks)) return false;
   return hooks.some((entry) => {
     const command = object(entry)?.["command"];
-    return typeof command === "string" && /(?:^|\s)import\s+--hook(?:\s|$)/.test(command);
+    return typeof command === "string" && isPotentialEditedGliaCommand(command);
   });
 }
 
