@@ -250,7 +250,7 @@ describe("Project Binding commands", () => {
     });
   });
 
-  test("bind rejects mismatched declarations and existing non-Git aliases", async () => {
+  test("bind rejects mismatched declarations and existing non-Git alias targets", async () => {
     const project = await loadProject(env.worktree, env.home);
     const declaredWorktree = await makeSecondWorktree(env, "declared-unbound");
     await writeDeclaration(declaredWorktree, createDeclaration("prj_declared_elsewhere"));
@@ -266,6 +266,21 @@ describe("Project Binding commands", () => {
     await expect(
       runProjectBind(machineContext(), project.declaration.projectId, ordinaryDirectory, true),
     ).rejects.toMatchObject({ code: "NOT_A_GIT_WORKTREE" });
+
+    const ordinaryFile = join(env.root, "ordinary-file");
+    await Bun.write(ordinaryFile, "not a directory\n");
+    await expect(
+      runProjectBind(machineContext(), project.declaration.projectId, ordinaryFile, true),
+    ).rejects.toMatchObject({ code: "NOT_A_GIT_WORKTREE" });
+    await expect(
+      runProjectBind(
+        machineContext(),
+        project.declaration.projectId,
+        join(ordinaryFile, "retired-checkout"),
+        true,
+      ),
+    ).rejects.toMatchObject({ code: "NOT_A_GIT_WORKTREE" });
+    expect((await readBindings(project.paths.bindingsFile))?.aliases).toEqual([]);
   });
 
   test("Binding conflict recovery commands quote contested paths", async () => {

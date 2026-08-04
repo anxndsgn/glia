@@ -57,6 +57,20 @@ async function pathStatus(path: string): Promise<PathStatus> {
   }
 }
 
+async function isGenuinelyMissingPath(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return true;
+    // ENOTDIR means the target or one of its ancestors is an existing
+    // non-directory, so it cannot represent a removed checkout path.
+    if (code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
 async function projectIds(home: string): Promise<string[]> {
   try {
     return (await readdir(join(home, "projects"), { withFileTypes: true }))
@@ -314,7 +328,10 @@ export async function runProjectBind(
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     const mayBeHistoricalAlias =
-      alias && path !== undefined && (code === "ENOENT" || code === "ENOTDIR");
+      alias &&
+      path !== undefined &&
+      (code === "ENOENT" || code === "ENOTDIR") &&
+      (await isGenuinelyMissingPath(candidate));
     if (!mayBeHistoricalAlias) {
       if (code === "ENOENT" || code === "ENOTDIR") {
         throw new GliaError(
