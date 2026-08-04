@@ -9,6 +9,7 @@ import { projectPaths } from "../../src/core/project/paths.ts";
 import type { CommandRunContext } from "../../src/core/session-module.ts";
 import { listCommand } from "../../src/session/commands/list.ts";
 import { confirmFirstImport } from "../../src/session/commands/import.ts";
+import { claudeCodeAdapter } from "../../src/session/adapters/claude-code/adapter.ts";
 import { mutateDiscoveryState } from "../../src/session/domain/discovery-state.ts";
 import { FAKE_KEY, makeTestEnv, writeClaudeSession, type TestEnv } from "../helpers.ts";
 
@@ -118,5 +119,29 @@ describe("explicit Project enrollment", () => {
     expect(prompt).toContain("Association: 1 Candidate(s) need a Project decision first");
     expect(prompt).toContain("SessionEnd: capture future Sessions automatically");
     expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();
+  });
+
+  test("first-import consent discloses Harness discovery failures before enrollment", async () => {
+    await mkdir(join(env.claudeHome, "projects"), { recursive: true });
+    const originalDiscover = claudeCodeAdapter.discover;
+    claudeCodeAdapter.discover = async function* () {
+      throw new Error("synthetic discovery failure");
+    };
+    try {
+      const project = await loadProjectForRead(env.worktree, env.home);
+      let prompt = "";
+      await expect(
+        confirmFirstImport(context(project), {}, async (message) => {
+          prompt = message;
+          return false;
+        }),
+      ).rejects.toMatchObject({ code: "CANCELLED" });
+
+      expect(prompt).toContain("Harness discovery failures: 1 Harness(es)");
+      expect(prompt).toContain("claude-code: synthetic discovery failure");
+      expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();
+    } finally {
+      claudeCodeAdapter.discover = originalDiscover;
+    }
   });
 });

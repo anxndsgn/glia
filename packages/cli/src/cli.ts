@@ -231,12 +231,15 @@ storeRemote
   .option("--yes", "accept the declaration change without prompting")
   .action(async (url: string, opts: { dryRun?: boolean; yes?: boolean }) => {
     await execute("store.remote.set", async (flags) => {
-      const ctx = await loadRunContext(flags, "write", { allowMissingStore: true });
+      const dryRun = opts.dryRun === true;
+      const ctx = await loadRunContext(flags, dryRun ? "read" : "write", {
+        allowMissingStore: true,
+      });
       const outcome = await runWithSessionAdvisory(
         ctx,
         () =>
           runStoreRemoteSet(ctx, url, {
-            dryRun: opts.dryRun === true,
+            dryRun,
             yes: opts.yes === true,
           }),
         target.stdout,

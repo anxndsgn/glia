@@ -57,7 +57,8 @@ return `NOT_ENROLLED` instead of pretending the Session ID is missing.
 
 Enrollment happens when you run a command that keeps or changes Project data,
 such as `import`, `accept`, `archive`, `delete`, `resolve`, `sync`, `setup`, or
-`store remote set`. The first interactive `glia import` explains the Store,
+an applied `store remote set`. Its `--dry-run` preview remains read-only. The
+first interactive `glia import` explains the Store,
 backlog, secret-withholding, and installed-hook consequences before creating
 the Project, Replica identity, Binding, and local Store under `~/.glia`.
 Scripted `--no-input` and `--json` imports proceed without prompting. Glia does

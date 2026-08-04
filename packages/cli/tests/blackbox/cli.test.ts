@@ -442,6 +442,7 @@ describe("compiled CLI contract", () => {
       ["--json", "import", "--dry-run"],
       ["--json", "status"],
       ["--json", "store", "remote", "show"],
+      ["--json", "store", "remote", "set", "/tmp/store.git", "--dry-run"],
     ]) {
       const run = await glia(args);
       expect(run.exitCode).toBe(0);

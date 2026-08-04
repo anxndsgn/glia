@@ -57,6 +57,12 @@ export async function confirmFirstImport(
       `  Source errors: ${preview.sourceErrors.length} Candidate(s) could not be previewed`,
     );
   }
+  if (preview.adapterFailures.length > 0) {
+    lines.push(
+      `  Harness discovery failures: ${preview.adapterFailures.length} Harness(es) were not fully inspected`,
+      ...preview.adapterFailures.map((failure) => `    ${failure.harnessId}: ${failure.message}`),
+    );
+  }
   lines.push("", "Continue?");
   if (!(await confirm(lines.join("\n")))) {
     throw new GliaError("CANCELLED", "import cancelled; the repository remains unenrolled", {
