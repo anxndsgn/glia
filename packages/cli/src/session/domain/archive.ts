@@ -1,6 +1,10 @@
 import { dirname, join } from "node:path";
 import { mkdir, readdir, rm } from "node:fs/promises";
-import type { LoadedProject, StoreUnitMerge } from "../../core/session-module.ts";
+import {
+  assertProjectWritable,
+  type LoadedProject,
+  type StoreUnitMerge,
+} from "../../core/session-module.ts";
 import { GliaError } from "../../core/output/errors.ts";
 import { requireSupportedSchemaVersion } from "../../core/state/schema-version.ts";
 import { WriterLease, writerLeaseTimeoutMs } from "../../core/store/lease.ts";
@@ -262,6 +266,7 @@ export async function transitionSessionArchive(
   sessionId: string,
   nextState: ArchiveState,
 ): Promise<ArchiveReport> {
+  assertProjectWritable(project);
   const lease = await WriterLease.acquire(project.paths.writerLockFile, writerLeaseTimeoutMs(env));
   try {
     const store = new ProjectStore(project.paths.storeDir);

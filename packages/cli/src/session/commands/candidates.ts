@@ -45,6 +45,8 @@ type DetectionReport =
 
 export const candidatesCommand: CommandDefinition = {
   name: "candidates",
+  projectAccess: "read",
+  unenrolledRead: "empty",
   description: "discover and classify every current Session Candidate without mutating the Store",
   options: [
     {

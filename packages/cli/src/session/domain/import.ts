@@ -1,6 +1,7 @@
 import { join } from "node:path";
-import { rm, stat } from "node:fs/promises";
-import type { LoadedProject } from "../../core/session-module.ts";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { assertProjectWritable, type LoadedProject } from "../../core/session-module.ts";
 import type { HarnessId } from "../../core/harnesses/ids.ts";
 import { GliaError } from "../../core/output/errors.ts";
 import { WriterLease, writerLeaseTimeoutMs } from "../../core/store/lease.ts";
@@ -134,6 +135,69 @@ interface EvaluationCapture {
 
 type CandidateProjectOwnership = "owned" | "other" | "unresolved";
 
+export interface EnrollmentPreview {
+  discovered: number;
+  associated: number;
+  pending: number;
+  wouldImport: number;
+  withheld: number;
+  sourceErrors: { candidateId: string; message: string }[];
+  unavailableHarnesses: DiscoveryResult["unavailableHarnesses"];
+  adapterFailures: DiscoveryResult["adapterFailures"];
+}
+
+/**
+ * Captures only into the operating system's temporary directory so first-use
+ * consent can state secret-withholding consequences without creating Glia state.
+ */
+export async function previewEnrollment(
+  project: LoadedProject,
+  env: Record<string, string | undefined>,
+  harness: HarnessId | null,
+): Promise<EnrollmentPreview> {
+  const discovery = await discoverCandidates(project, env, harness);
+  const targets = discovery.candidates.filter(
+    (entry) => entry.classification.kind === "associated",
+  );
+  const preview: EnrollmentPreview = {
+    discovered: discovery.candidates.length,
+    associated: targets.length,
+    pending: discovery.candidates.filter((entry) => entry.classification.kind === "pending").length,
+    wouldImport: 0,
+    withheld: 0,
+    sourceErrors: [],
+    unavailableHarnesses: discovery.unavailableHarnesses,
+    adapterFailures: discovery.adapterFailures,
+  };
+  const staging = await mkdtemp(join(tmpdir(), "glia-enrollment-preview-"));
+  try {
+    for (const { candidate } of targets) {
+      try {
+        const candidateDir = join(staging, candidate.candidateId);
+        const captured = await adapterFor(candidate.identity.harnessId).capture(candidate, {
+          dir: candidateDir,
+        });
+        if (
+          project.declaration.secretDetection.enabled !== false &&
+          withholdsAcceptance(await detectSecrets(candidateDir, captured))
+        ) {
+          preview.withheld += 1;
+        } else {
+          preview.wouldImport += 1;
+        }
+      } catch (error) {
+        preview.sourceErrors.push({
+          candidateId: candidate.candidateId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return preview;
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
 /**
  * Import sequence: discover and classify, capture into machine-local
  * staging, then under the writer lease revalidate, accept, commit the
@@ -144,6 +208,7 @@ export async function runImport(
   env: Record<string, string | undefined>,
   options: ImportOptions,
 ): Promise<ImportReport> {
+  if (!options.dryRun) assertProjectWritable(project);
   // Evaluation updates are committed with compare-and-swap semantics against
   // this snapshot. A concurrent explicit decision therefore wins over an
   // older hook capture instead of being resurrected by its final write.

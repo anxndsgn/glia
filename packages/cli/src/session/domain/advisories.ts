@@ -8,6 +8,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type SessionAdvisory =
   | { kind: "importable"; count: number }
+  | { kind: "not_enrolled"; count: number }
   | { kind: "pending"; count: number }
   | {
       kind: "withheld";
@@ -100,8 +101,12 @@ export function renderDiscoveryAdvisories(
       );
     } else if (advisory.kind === "pending") {
       lines.push(`${advisory.count} Session Candidate(s) are pending Project association.`);
-    } else {
+    } else if (advisory.kind === "withheld") {
       lines.push(renderWithheldBanner(advisory, now));
+    } else {
+      lines.push(
+        `This repository is not enrolled with Glia; run \`glia import\` to enroll it. ${advisory.count} Session Candidate(s) would be captured.`,
+      );
     }
   }
   return lines;

@@ -17,12 +17,38 @@ export interface DiscoveryResult {
   adapterFailures: AdapterFailure[];
 }
 
+const synthesizedDiscoveryCache = new WeakMap<
+  LoadedProject,
+  Map<string, Promise<DiscoveryResult>>
+>();
+
 /**
  * Read-only discovery across every eligible Harness. An unavailable or
  * empty Harness never fails the run; adapter failures are isolated and
  * reported as a partial result.
  */
-export async function discoverCandidates(
+export function discoverCandidates(
+  project: LoadedProject,
+  env: Record<string, string | undefined>,
+  harnessFilter: HarnessId | null,
+): Promise<DiscoveryResult> {
+  if (project.enrollment.kind === "enrolled") {
+    return discoverCandidatesUncached(project, env, harnessFilter);
+  }
+  let byHarness = synthesizedDiscoveryCache.get(project);
+  if (byHarness === undefined) {
+    byHarness = new Map();
+    synthesizedDiscoveryCache.set(project, byHarness);
+  }
+  const key = harnessFilter ?? "*";
+  const cached = byHarness.get(key);
+  if (cached !== undefined) return cached;
+  const discovery = discoverCandidatesUncached(project, env, harnessFilter);
+  byHarness.set(key, discovery);
+  return discovery;
+}
+
+async function discoverCandidatesUncached(
   project: LoadedProject,
   env: Record<string, string | undefined>,
   harnessFilter: HarnessId | null,
@@ -30,7 +56,10 @@ export async function discoverCandidates(
   const state = await readDiscoveryState(project.paths.discoveryFile);
   // One Binding scan for the whole run: classification is per candidate,
   // but the Bindings it reads are the same for every one of them.
-  const bindings = new BindingIndex(project.home);
+  const bindings = new BindingIndex(
+    project.home,
+    project.enrollment.kind === "unenrolled" ? project.enrollment.bindingOverlay : null,
+  );
   const result: DiscoveryResult = { candidates: [], unavailableHarnesses: [], adapterFailures: [] };
 
   for (const adapter of sessionAdapters) {

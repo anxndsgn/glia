@@ -6,6 +6,7 @@ import { resolveSessionConflict } from "../domain/resolve.ts";
 
 export const resolveCommand: CommandDefinition = {
   name: "resolve",
+  projectAccess: "write",
   description: "resolve a Session Conflict by promoting one candidate to Current Revision",
   arguments: [{ name: "session-id", description: "the frozen Session's ID" }],
   options: [

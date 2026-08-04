@@ -1,5 +1,7 @@
 import type { GliaDeclaration } from "./config/glia-json.ts";
 import type { CommandOutcome } from "./output/result.ts";
+import { GliaError } from "./output/errors.ts";
+import type { BindingOverlay } from "./project/bindings.ts";
 import type { ProjectPaths } from "./project/paths.ts";
 
 export interface LoadedProject {
@@ -8,6 +10,20 @@ export interface LoadedProject {
   declaration: GliaDeclaration;
   paths: ProjectPaths;
   replicaId: string;
+  enrollment: { kind: "enrolled" } | { kind: "unenrolled"; bindingOverlay: BindingOverlay };
+}
+
+export function projectIsEnrolled(project: LoadedProject): boolean {
+  return project.enrollment.kind === "enrolled";
+}
+
+/** Synthesized read Projects must never become an accidental enrollment path. */
+export function assertProjectWritable(project: LoadedProject): void {
+  if (!projectIsEnrolled(project)) {
+    throw new GliaError("INTERNAL", "attempted to write through a synthesized read-only Project", {
+      worktree: project.worktree,
+    });
+  }
 }
 
 export interface ModuleContext {
@@ -35,6 +51,10 @@ export interface CommandDefinition {
   description: string;
   arguments?: { name: string; description: string }[];
   options?: CommandOptionDefinition[];
+  /** Project resolution is centralized so adding a verb requires an explicit enrollment choice. */
+  projectAccess: "read" | "write" | ((options: Record<string, unknown>) => "read" | "write");
+  /** ID-addressed reads fail when the current worktree has never enrolled. */
+  unenrolledRead?: "empty" | "error";
   run(
     ctx: CommandRunContext,
     args: (string | undefined)[],

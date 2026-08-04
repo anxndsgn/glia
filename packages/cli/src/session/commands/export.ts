@@ -11,6 +11,8 @@ export const EXPORT_FORMAT_VERSION = 1;
 
 export const exportCommand: CommandDefinition = {
   name: "export",
+  projectAccess: "read",
+  unenrolledRead: "error",
   description: "export one Session to a stable, versioned public directory format",
   arguments: [{ name: "session-id", description: "the Session ID" }],
   options: [

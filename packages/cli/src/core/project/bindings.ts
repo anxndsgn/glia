@@ -1,9 +1,10 @@
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { realpathSync } from "node:fs";
-import { mkdir, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { projectPaths } from "./paths.ts";
 import { resolveWorktreeTopLevel } from "./resolve.ts";
 import { requireSupportedSchemaVersion } from "../state/schema-version.ts";
+import { writeJsonAtomic } from "../state/atomic-file.ts";
 import { GliaError } from "../output/errors.ts";
 
 export const BINDINGS_SCHEMA_VERSION = 1;
@@ -40,19 +41,27 @@ export async function readBindings(bindingsFile: string): Promise<Bindings | nul
 }
 
 export async function writeBindings(bindingsFile: string, bindings: Bindings): Promise<void> {
-  await mkdir(dirname(bindingsFile), { recursive: true });
-  await Bun.write(bindingsFile, JSON.stringify(bindings, null, 2) + "\n");
+  await writeJsonAtomic(bindingsFile, bindings);
 }
 
 export function normalizeBoundPath(path: string): string {
   let resolved = resolve(path);
-  try {
-    // Symlinked variants (e.g. /var vs /private/var on macOS) must map to
-    // one Binding. Former checkout paths may no longer exist; fall back to
-    // the lexical form so aliases still match.
-    resolved = realpathSync(resolved);
-  } catch {
-    // Keep the lexical resolution.
+  const missingSuffix: string[] = [];
+  let probe = resolved;
+  for (;;) {
+    try {
+      // Canonicalize the deepest existing ancestor, then restore any missing
+      // suffix. This preserves /var ↔ /private/var equivalence even after a
+      // checkout has been removed.
+      resolved = join(realpathSync(probe), ...missingSuffix);
+      break;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const parent = dirname(probe);
+      if ((code !== "ENOENT" && code !== "ENOTDIR") || parent === probe) break;
+      missingSuffix.unshift(basename(probe));
+      probe = parent;
+    }
   }
   return resolved.length > 1 && resolved.endsWith(sep) ? resolved.slice(0, -1) : resolved;
 }
@@ -82,6 +91,12 @@ export function bindingsBindWorktree(bindings: Bindings, worktree: string): bool
   );
 }
 
+/** Exact worktree admission for capture: historical aliases do not qualify. */
+export function bindingsRootWorktree(bindings: Bindings, worktree: string): boolean {
+  const candidate = normalizeBoundPath(worktree);
+  return bindings.roots.some((path) => normalizeBoundPath(path) === candidate);
+}
+
 export interface PathMapping {
   projectId: string;
 }
@@ -90,6 +105,11 @@ export interface OpeningPathResolution {
   /** False when the path vanished before any exact historical Binding proved ownership. */
   resolved: boolean;
   mapping: PathMapping | null;
+}
+
+export interface BindingOverlay {
+  worktree: string;
+  projectId: string;
 }
 
 /**
@@ -103,11 +123,16 @@ export interface OpeningPathResolution {
  */
 export class BindingIndex {
   readonly #home: string;
+  readonly #overlay: { worktree: string; projectId: string } | null;
   readonly #byFile = new Map<string, Bindings | null>();
   #projectIds: string[] | null = null;
 
-  constructor(home: string) {
+  constructor(home: string, overlay: BindingOverlay | null = null) {
     this.#home = home;
+    this.#overlay =
+      overlay === null
+        ? null
+        : { worktree: normalizeBoundPath(overlay.worktree), projectId: overlay.projectId };
   }
 
   /** The Bindings at `bindingsFile`, read once per index. */
@@ -135,7 +160,11 @@ export class BindingIndex {
    * GLIA_HOME. Returns the owning Project when a Binding claims the path.
    */
   async mapPath(openingPath: string): Promise<PathMapping | null> {
-    let best: { projectId: string; length: number } | null = null;
+    const candidate = normalizeBoundPath(openingPath);
+    let best: { projectId: string; length: number } | null =
+      this.#overlay !== null && isWithin(this.#overlay.worktree, candidate)
+        ? { projectId: this.#overlay.projectId, length: this.#overlay.worktree.length }
+        : null;
     for (const projectId of await this.#ids()) {
       const bindings = await this.read(projectPaths(this.#home, projectId).bindingsFile);
       if (bindings) {
@@ -196,11 +225,20 @@ export class BindingIndex {
 
   /** Finds the Binding whose root/alias is exactly this Git worktree. */
   async mapWorktree(worktree: string): Promise<PathMapping | null> {
+    const candidate = normalizeBoundPath(worktree);
+    let owner =
+      this.#overlay?.worktree === candidate ? { projectId: this.#overlay.projectId } : null;
     for (const projectId of await this.#ids()) {
       const bindings = await this.read(projectPaths(this.#home, projectId).bindingsFile);
-      if (bindings && bindingsBindWorktree(bindings, worktree)) return { projectId };
+      if (
+        bindings &&
+        bindingsBindWorktree(bindings, candidate) &&
+        (owner === null || projectId < owner.projectId)
+      ) {
+        owner = { projectId };
+      }
     }
-    return null;
+    return owner;
   }
 }
 

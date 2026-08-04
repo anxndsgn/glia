@@ -1,10 +1,12 @@
 import { buildInfo } from "../build-info.ts";
-import type { SessionModule, LoadedProject } from "../session-module.ts";
+import { projectIsEnrolled, type SessionModule, type LoadedProject } from "../session-module.ts";
 import type { CommandOutcome } from "../output/result.ts";
 import { readBindings } from "../project/bindings.ts";
 import { countPreservedItems, readDeletionPending } from "../store/deletion.ts";
 import { readSyncState } from "../store/sync-state.ts";
 import { ageDays } from "../../session/domain/advisories.ts";
+import { HARNESS_IDS } from "../harnesses/ids.ts";
+import { managedHookInstalled } from "../hooks/config.ts";
 
 /** `glia status` is read-only after Project resolution and never touches the network. */
 export async function runStatus(
@@ -12,6 +14,7 @@ export async function runStatus(
   modules: readonly SessionModule[],
   env: Record<string, string | undefined>,
 ): Promise<CommandOutcome> {
+  const enrolled = projectIsEnrolled(project);
   const bindings = await readBindings(project.paths.bindingsFile);
   const remote = project.declaration.store.remote ?? null;
   const syncState = await readSyncState(project.paths.syncStateFile);
@@ -25,12 +28,24 @@ export async function runStatus(
     ? await sessionModule.inspect({ project, env }, sessionModule.parseConfig(project.declaration))
     : { detail: {} };
   const build = buildInfo();
+  const hookInstallation = Object.fromEntries(
+    await Promise.all(
+      HARNESS_IDS.map(async (harnessId) => [
+        harnessId,
+        await managedHookInstalled(harnessId, env).catch(() => false),
+      ]),
+    ),
+  );
 
   const lines = [
-    `project ${project.declaration.projectId}`,
+    enrolled ? `project ${project.declaration.projectId}` : "repository (not enrolled)",
     `  worktree: ${project.worktree}`,
     `  glia: ${build.version} (${build.commit} ${build.builtAt})`,
-    `  store: ${remote ? `remote ${remote}` : "local_only (no clean-machine recovery until a remote is configured)"}`,
+    enrolled
+      ? `  store: ${remote ? `remote ${remote}` : "local_only (no clean-machine recovery until a remote is configured)"}`
+      : `  store declaration: ${remote ?? "none"}`,
+    `  enrollment: ${enrolled ? "enrolled" : "not enrolled (run `glia import`)"}`,
+    `  hooks installed: ${HARNESS_IDS.map((id) => `${id}=${hookInstallation[id] ? "yes" : "no"}`).join(" ")}`,
   ];
   if (remote) {
     lines.push(
@@ -53,7 +68,7 @@ export async function runStatus(
   if (unknownKeys.length > 0) {
     lines.push(`  glia.json: unrecognized top-level key(s) ${unknownKeys.join(", ")} (preserved)`);
   }
-  lines.push(`  bound roots: ${bindings?.roots.join(", ") ?? "(none)"}`);
+  lines.push(`  bound roots: ${enrolled ? (bindings?.roots.join(", ") ?? "(none)") : "(none)"}`);
   const detailText = Object.entries(sessionStatus.detail)
     .map(
       ([key, value]) =>
@@ -91,9 +106,11 @@ export async function runStatus(
 
   return {
     json: {
-      projectId: project.declaration.projectId,
+      projectId: enrolled ? project.declaration.projectId : null,
+      enrolled,
       worktree: project.worktree,
       build,
+      hookInstallation,
       store: {
         mode: remote ? "remote" : "local_only",
         remote,

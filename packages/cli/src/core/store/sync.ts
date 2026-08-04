@@ -1,6 +1,11 @@
 import { dirname, join } from "node:path";
 import { mkdir, rename, rm } from "node:fs/promises";
-import type { SessionModule, LoadedProject, StoreConflictSide } from "../session-module.ts";
+import {
+  assertProjectWritable,
+  type SessionModule,
+  type LoadedProject,
+  type StoreConflictSide,
+} from "../session-module.ts";
 import { GliaError } from "../output/errors.ts";
 import { WriterLease, writerLeaseTimeoutMs } from "./lease.ts";
 import { git, gitBytes, gitOrThrow } from "./git.ts";
@@ -96,6 +101,7 @@ export async function runSync(
   modules: readonly SessionModule[],
   options: SyncOptions = {},
 ): Promise<SyncReport> {
+  assertProjectWritable(project);
   const remote = project.declaration.store.remote;
   if (!remote) {
     throw new GliaError(

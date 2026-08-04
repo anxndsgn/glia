@@ -14,6 +14,7 @@ function commandFor(nextState: ArchiveState): CommandDefinition {
   const verb = nextState === "archived" ? "archive" : "unarchive";
   return {
     name: verb,
+    projectAccess: "write",
     description:
       nextState === "archived"
         ? "hide one Session from default collection queries without changing its evidence"

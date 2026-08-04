@@ -21,6 +21,8 @@ const SESSION_ID_WIDTH = 36;
 
 export const listCommand: CommandDefinition = {
   name: "list",
+  projectAccess: "read",
+  unenrolledRead: "empty",
   description: "list accepted Sessions by latest event time, newest first",
   options: [
     {

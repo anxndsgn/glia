@@ -22,6 +22,7 @@ import { candidateDisplayLabel, shortSessionTime } from "./candidate-display.ts"
 
 export const acceptCommand: CommandDefinition = {
   name: "accept",
+  projectAccess: "write",
   description:
     "explicitly associate pending Candidates with this Project and accept them into the Store",
   arguments: [

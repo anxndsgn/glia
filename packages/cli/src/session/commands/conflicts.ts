@@ -8,6 +8,8 @@ import {
 
 export const conflictsCommand: CommandDefinition = {
   name: "conflicts",
+  projectAccess: "read",
+  unenrolledRead: "empty",
   description: "list frozen Sessions with each conflict candidate's objective metadata",
   async run(ctx): Promise<CommandOutcome> {
     const { storeDir } = ctx.project.paths;

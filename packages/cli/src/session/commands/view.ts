@@ -33,6 +33,8 @@ const TIMESTAMP_WIDTH = "2026-07-15T09:12:41Z".length;
 
 export const viewCommand: CommandDefinition = {
   name: "view",
+  projectAccess: "read",
+  unenrolledRead: "error",
   description: "render one Session's event timeline in source order; read-only",
   arguments: [{ name: "session-id", description: "the Session ID" }],
   options: [

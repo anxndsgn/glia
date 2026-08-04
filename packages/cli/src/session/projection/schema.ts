@@ -5,6 +5,8 @@ import type { Database } from "bun:sqlite";
  * so published projections rebuild even for an unchanged Store commit.
  */
 export const PROJECTION_VERSION = 2;
+/** In-process sentinel for a schema-correct empty projection with no backing file. */
+export const EMPTY_PROJECTION_PATH = ":glia-empty-projection:";
 
 /**
  * The projection is a disposable normalized view. SQLite paths, tables,
