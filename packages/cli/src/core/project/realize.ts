@@ -8,17 +8,16 @@ export async function realizeProject(
   paths: ProjectPaths,
   projectId: string,
   declaredRemote: string | null,
-  options: { allowMissingStore: boolean },
 ): Promise<void> {
   await mkdir(paths.stateDir, { recursive: true });
   await mkdir(paths.cacheDir, { recursive: true });
 
+  // A declared remote is never contacted implicitly: only sync may
+  // populate the Store, so commands that do not pass `allowMissingStore`
+  // receive a typed refusal from loadProject after local realization.
   const store = new ProjectStore(paths.storeDir);
-  if (!(await store.exists()) && (declaredRemote === null || !options.allowMissingStore)) {
-    // A declared remote is never contacted implicitly. Commands that do
-    // not pass `allowMissingStore` receive a typed refusal from
-    // loadProject after local realization.
-    if (declaredRemote === null) await store.init(projectId);
+  if (!(await store.exists()) && declaredRemote === null) {
+    await store.init(projectId);
   }
 
   // loadProject holds the machine-global Binding lease across realization.

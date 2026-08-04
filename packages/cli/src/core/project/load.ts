@@ -93,9 +93,7 @@ export async function loadProject(
     const identity = (await readReplicaIdentity(home)) ?? (await createReplicaIdentity(home));
     const paths = projectPaths(home, projectId);
 
-    await realizeProject(worktree, paths, projectId, declaration.store.remote ?? null, {
-      allowMissingStore: options.allowMissingStore === true,
-    });
+    await realizeProject(worktree, paths, projectId, declaration.store.remote ?? null);
 
     if (options.allowMissingStore !== true && !(await new ProjectStore(paths.storeDir).exists())) {
       throw storeNotRealizedError(projectId);
