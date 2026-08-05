@@ -32,12 +32,20 @@ export type ErrorCode =
 export class GliaError extends Error {
   readonly code: ErrorCode;
   readonly details: Record<string, unknown>;
+  /** Exact follow-up commands that recover from this error; rendered in both output modes. */
+  readonly nextSteps: readonly string[];
 
-  constructor(code: ErrorCode, message: string, details: Record<string, unknown> = {}) {
+  constructor(
+    code: ErrorCode,
+    message: string,
+    details: Record<string, unknown> = {},
+    nextSteps: readonly string[] = [],
+  ) {
     super(message);
     this.name = "GliaError";
     this.code = code;
     this.details = details;
+    this.nextSteps = nextSteps;
   }
 }
 

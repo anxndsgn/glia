@@ -183,10 +183,7 @@ async function acquireBindingsLease(
     return await WriterLease.acquire(bindingsLockFile(ctx.home), writerLeaseTimeoutMs(ctx.env));
   } catch (error) {
     if (error instanceof GliaError && error.code === "PROJECT_BUSY") {
-      throw new GliaError(error.code, error.message, {
-        ...error.details,
-        nextSteps: [retryCommand],
-      });
+      throw new GliaError(error.code, error.message, error.details, [retryCommand]);
     }
     throw error;
   }
@@ -208,10 +205,12 @@ async function inspectForget(
 ): Promise<ForgetInspection> {
   const matches = await exactPathMatches(ctx.home, normalized);
   if (matches.length === 0) {
-    throw new GliaError("PATH_NOT_BOUND", `path ${normalized} is not bound to any Project`, {
-      path: normalized,
-      nextSteps: ["glia project list"],
-    });
+    throw new GliaError(
+      "PATH_NOT_BOUND",
+      `path ${normalized} is not bound to any Project`,
+      { path: normalized },
+      ["glia project list"],
+    );
   }
   const match = matches[0]!;
   const paths = projectPaths(ctx.home, match.projectId);
@@ -285,7 +284,8 @@ export async function runProjectForget(
       throw new GliaError(
         "BINDING_CHANGED",
         `the Binding or Store changed while confirmation was open; review the current state and try again`,
-        { path: normalized, nextSteps: [retryCommand] },
+        { path: normalized },
+        [retryCommand],
       );
     }
     current.match.bindings.roots = current.match.bindings.roots.filter(
@@ -353,10 +353,8 @@ export async function runProjectBind(
       throw new GliaError(
         "PROJECT_NOT_FOUND",
         `project ${projectId} does not exist on this machine`,
-        {
-          projectId,
-          nextSteps: ["glia project list"],
-        },
+        { projectId },
+        ["glia project list"],
       );
     }
     const declaration = await readDeclaration(targetPath);
@@ -364,12 +362,8 @@ export async function runProjectBind(
       throw new GliaError(
         "BINDING_CONFLICT",
         `path ${targetPath} declares project ${declaration.projectId} in glia.json and cannot be bound to ${projectId}`,
-        {
-          path: targetPath,
-          projectId,
-          declaredProjectId: declaration.projectId,
-          nextSteps: ["glia project list"],
-        },
+        { path: targetPath, projectId, declaredProjectId: declaration.projectId },
+        ["glia project list"],
       );
     }
     const matches = await exactPathMatches(ctx.home, targetPath);
@@ -378,13 +372,8 @@ export async function runProjectBind(
       throw new GliaError(
         "BINDING_CONFLICT",
         `path ${targetPath} is already claimed by project ${owner.projectId}`,
-        {
-          path: targetPath,
-          projectId,
-          currentOwner: owner.projectId,
-          currentKind: owner.kind,
-          nextSteps: [`glia project forget ${shellQuote(targetPath)}`],
-        },
+        { path: targetPath, projectId, currentOwner: owner.projectId, currentKind: owner.kind },
+        [`glia project forget ${shellQuote(targetPath)}`],
       );
     }
 

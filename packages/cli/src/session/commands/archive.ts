@@ -53,10 +53,8 @@ function commandFor(nextState: ArchiveState): CommandDefinition {
           throw new GliaError(
             "INPUT_REQUIRED",
             `session ${verb} needs confirmation; re-run with --yes to accept or --dry-run to preview`,
-            {
-              plan,
-              nextSteps: [`glia ${verb} ${sessionId} --dry-run`, `glia ${verb} ${sessionId} --yes`],
-            },
+            { plan },
+            [`glia ${verb} ${sessionId} --dry-run`, `glia ${verb} ${sessionId} --yes`],
           );
         }
         if (!(await confirmProceed(`${previewText(plan)}\n\nContinue?`))) {

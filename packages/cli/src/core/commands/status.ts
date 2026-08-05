@@ -4,7 +4,6 @@ import type { CommandOutcome } from "../output/result.ts";
 import { readBindings } from "../project/bindings.ts";
 import { countPreservedItems, readDeletionPending } from "../store/deletion.ts";
 import { readSyncState } from "../store/sync-state.ts";
-import { ageDays } from "../../session/domain/advisories.ts";
 import { HARNESS_IDS } from "../harnesses/ids.ts";
 import { managedHookInstalled } from "../hooks/config.ts";
 
@@ -26,7 +25,7 @@ export async function runStatus(
   const sessionModule = modules[0];
   const sessionStatus = sessionModule
     ? await sessionModule.inspect({ project, env }, sessionModule.parseConfig(project.declaration))
-    : { detail: {} };
+    : { detail: {}, humanLines: [] };
   const build = buildInfo();
   const hookInstallation = Object.fromEntries(
     await Promise.all(
@@ -69,40 +68,7 @@ export async function runStatus(
     lines.push(`  glia.json: unrecognized top-level key(s) ${unknownKeys.join(", ")} (preserved)`);
   }
   lines.push(`  bound roots: ${enrolled ? (bindings?.roots.join(", ") ?? "(none)") : "(none)"}`);
-  const detailText = Object.entries(sessionStatus.detail)
-    .map(
-      ([key, value]) =>
-        `${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`,
-    )
-    .join(" ");
-  lines.push(`  session: ${detailText}`);
-  const withheld = sessionStatus.detail["withheldCandidates"] as
-    | { count?: number; oldestFirstFlaggedAt?: string | null; retentionWarning?: boolean }
-    | undefined;
-  if ((withheld?.count ?? 0) > 0) {
-    const days = ageDays(withheld!.oldestFirstFlaggedAt!);
-    const age = days === 0 ? "less than a day" : `${days} day(s)`;
-    lines.push(
-      `  withheld: ${withheld!.count} candidate(s), oldest withheld for ${age} (first flagged ${withheld!.oldestFirstFlaggedAt})` +
-        (withheld!.retentionWarning ? "; Harness retention may delete the source" : ""),
-    );
-  }
-  const lost = sessionStatus.detail["lostWithheldCandidates"] as { count?: number } | undefined;
-  if ((lost?.count ?? 0) > 0) {
-    lines.push(`  withheld source loss: ${lost!.count} candidate(s)`);
-  }
-  const hooks = sessionStatus.detail["hookLiveness"] as
-    | {
-        machineLastRunAt?: string | null;
-        projectLastRunAt?: string | null;
-        projectLastOutcome?: string | null;
-      }
-    | undefined;
-  lines.push(
-    `  hook last run (machine): ${hooks?.machineLastRunAt ?? "never"}`,
-    `  hook last import (Project): ${hooks?.projectLastRunAt ?? "never"}` +
-      (hooks?.projectLastOutcome ? ` (${hooks.projectLastOutcome})` : ""),
-  );
+  lines.push(...sessionStatus.humanLines.map((line) => `  ${line}`));
 
   return {
     json: {

@@ -107,7 +107,8 @@ export async function runSync(
     throw new GliaError(
       "NO_STORE_REMOTE",
       "this Project's Store is local_only; declare a remote with `glia store remote set <url>`",
-      { nextSteps: ["glia store remote set <url>"] },
+      {},
+      ["glia store remote set <url>"],
     );
   }
 
@@ -153,7 +154,8 @@ export async function runSync(
               throw new GliaError(
                 "REWRITE_PUSH_REFUSED",
                 `the remote refuses the deletion's history rewrite: ${push.stderr.trim()}; the deletion remains applied locally and propagation-pending — allow non-fast-forward pushes on the remote (receive.denyNonFastForwards, protected branches) and re-run \`glia sync\``,
-                { remote, gitMessage: push.stderr.trim(), nextSteps: ["glia sync"] },
+                { remote, gitMessage: push.stderr.trim() },
+                ["glia sync"],
               );
             }
             continue; // the remote advanced; re-run the cycle
