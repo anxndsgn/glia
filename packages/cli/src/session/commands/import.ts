@@ -65,9 +65,9 @@ export async function confirmFirstImport(
   }
   lines.push("", "Continue?");
   if (!(await confirm(lines.join("\n")))) {
-    throw new GliaError("CANCELLED", "import cancelled; the repository remains unenrolled", {
-      nextSteps: ["glia import"],
-    });
+    throw new GliaError("CANCELLED", "import cancelled; the repository remains unenrolled", {}, [
+      "glia import",
+    ]);
   }
 }
 

@@ -64,6 +64,12 @@ export interface CommandDefinition {
 
 export interface ModuleStatus {
   detail: Record<string, unknown>;
+  /**
+   * The same facts as `detail`, rendered as human `status` lines. The
+   * module owns the wording because core cannot read `detail`'s shape;
+   * `status` owns placement and indentation.
+   */
+  humanLines: string[];
 }
 
 export interface StoreConflictSide {

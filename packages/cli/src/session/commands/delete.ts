@@ -37,8 +37,8 @@ export const deleteCommand: CommandDefinition = {
               epoch: plan.nextEpoch,
             },
             limitation: DELETION_LIMITATION,
-            nextSteps: [`glia delete ${sessionId} --yes`],
           },
+          [`glia delete ${sessionId} --yes`],
         );
       }
       if (!(await confirmProceed(`${previewText(plan)}\n\nDelete permanently?`))) {

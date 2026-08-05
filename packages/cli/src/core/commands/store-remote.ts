@@ -2,6 +2,7 @@ import { writeDeclaration } from "../config/glia-json.ts";
 import type { CommandRunContext } from "../session-module.ts";
 import { confirmProceed } from "../output/confirm.ts";
 import { GliaError } from "../output/errors.ts";
+import { shellQuote } from "../output/shell.ts";
 import type { CommandOutcome } from "../output/result.ts";
 import { validateStoreRemoteUrl } from "../store/remote-url.ts";
 import { assertProjectWritable, projectIsEnrolled } from "../session-module.ts";
@@ -51,14 +52,11 @@ export async function runStoreRemoteSet(
       throw new GliaError(
         "INPUT_REQUIRED",
         "store remote set needs confirmation; re-run with --yes to accept or --dry-run to preview",
-        {
-          remote: url,
-          previous,
-          nextSteps: [
-            `glia store remote set ${url} --dry-run`,
-            `glia store remote set ${url} --yes`,
-          ],
-        },
+        { remote: url, previous },
+        [
+          `glia store remote set ${shellQuote(url)} --dry-run`,
+          `glia store remote set ${shellQuote(url)} --yes`,
+        ],
       );
     }
     if (!(await confirmProceed(`${preview}\n\nContinue?`))) {

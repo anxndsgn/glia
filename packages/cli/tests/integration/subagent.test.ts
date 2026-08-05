@@ -195,6 +195,18 @@ describe("subagent lifecycle across the command surface", () => {
       transcriptCount: 0,
       spawnedSessionIds: [],
     });
+    // The structured object is the document's only truth source: the raw
+    // projection columns it is built from must not ride along beside it.
+    for (const raw of [
+      "subagentOrigin",
+      "subagentKind",
+      "subagentParent",
+      "subagentParentSession",
+      "subagentCount",
+      "spawnedSubagents",
+    ]) {
+      expect(session[raw]).toBeUndefined();
+    }
 
     const parent = await showCommand.run(ctx, [codexParentId], {});
     const parentSession = (parent.json as { session: Record<string, unknown> }).session;

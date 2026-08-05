@@ -24,12 +24,8 @@ function declarationMismatchError(worktree: string, declared: string, owner: str
   return new GliaError(
     "BINDING_CONFLICT",
     `worktree ${worktree} is already bound to project ${owner}, but glia.json declares ${declared}`,
-    {
-      worktree,
-      projectId: declared,
-      currentOwner: owner,
-      nextSteps: ["glia project list", `glia project forget ${shellQuote(worktree)}`],
-    },
+    { worktree, projectId: declared, currentOwner: owner },
+    ["glia project list", `glia project forget ${shellQuote(worktree)}`],
   );
 }
 
@@ -37,7 +33,8 @@ function storeNotRealizedError(projectId: string): GliaError {
   return new GliaError(
     "STORE_NOT_REALIZED",
     `project ${projectId} declares a remote but has no local Store; run \`glia sync\` first`,
-    { projectId, nextSteps: ["glia sync"] },
+    { projectId },
+    ["glia sync"],
   );
 }
 
@@ -45,11 +42,8 @@ function refuseAliasOnlyWorktree(worktree: string, projectId: string): never {
   throw new GliaError(
     "ALIAS_ONLY_WORKTREE",
     `worktree ${worktree} is a historical alias of project ${projectId}; bind it as a root before running Project commands here`,
-    {
-      worktree,
-      projectId,
-      nextSteps: [`glia project bind ${shellQuote(projectId)} ${shellQuote(worktree)}`],
-    },
+    { worktree, projectId },
+    [`glia project bind ${shellQuote(projectId)} ${shellQuote(worktree)}`],
   );
 }
 

@@ -18,10 +18,12 @@ function asObject(value: unknown): Record<string, unknown> {
 }
 
 export function notEnrolledError(project: LoadedProject): GliaError {
-  return new GliaError("NOT_ENROLLED", `repository ${project.worktree} is not enrolled with Glia`, {
-    worktree: project.worktree,
-    nextSteps: ["glia import"],
-  });
+  return new GliaError(
+    "NOT_ENROLLED",
+    `repository ${project.worktree} is not enrolled with Glia`,
+    { worktree: project.worktree },
+    ["glia import"],
+  );
 }
 
 /** Adds the public enrollment contract and suppresses the synthesized identity. */

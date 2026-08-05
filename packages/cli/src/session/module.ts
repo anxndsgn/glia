@@ -44,7 +44,7 @@ import {
   serializeLedgerFile,
 } from "./domain/deletion.ts";
 import { countArchivedSessions, mergeArchiveUnit, SESSION_ARCHIVE_DIR } from "./domain/archive.ts";
-import { advisoriesForDiscovery } from "./domain/advisories.ts";
+import { advisoriesForDiscovery, ageDays } from "./domain/advisories.ts";
 import { readWithheldLosses } from "./domain/withheld-loss.ts";
 import { readHookLiveness, readHookRunReport } from "../core/hooks/run-state.ts";
 
@@ -166,6 +166,58 @@ export const sessionModule: SessionModule<SessionConfig> = {
       readHookLiveness(project.home),
       readHookRunReport(project),
     ]);
+    const withheldStatus =
+      withheld?.kind === "withheld"
+        ? {
+            count: withheld.count,
+            oldestFirstFlaggedAt: withheld.oldestFirstFlaggedAt,
+            retentionWarning: withheld.retentionWarning,
+          }
+        : { count: 0, oldestFirstFlaggedAt: null, retentionWarning: false };
+    const projection =
+      pointer === null
+        ? { state: "absent" as const }
+        : {
+            state: head !== null && pointerIsCurrent(pointer, head) ? "fresh" : ("stale" as const),
+            storeCommit: pointer.storeCommit,
+          };
+
+    const humanLines = [
+      `sessions: ${sessionIds.length} (${archived} archived, ${conflictedIds.length} conflicted)`,
+      `candidates: ${importable?.count ?? 0} importable, ${pendingCandidates} pending, ${ignoredCandidates} ignored`,
+      `secret detection: ${config.secretDetectionEnabled ? "enabled" : "disabled"}`,
+      projection.state === "fresh"
+        ? `projection: fresh (Store commit ${projection.storeCommit!.slice(0, 12)})`
+        : `projection: ${projection.state} (the next query rebuilds it)`,
+    ];
+    if (tombstoneEvents.length > 0) {
+      humanLines.push(`tombstones: ${tombstoneEvents.length} deletion event(s)`);
+    }
+    if (withheldStatus.count > 0) {
+      const days = ageDays(withheldStatus.oldestFirstFlaggedAt!);
+      const age = days === 0 ? "less than a day" : `${days} day(s)`;
+      humanLines.push(
+        `withheld: ${withheldStatus.count} candidate(s), oldest withheld for ${age} (first flagged ${withheldStatus.oldestFirstFlaggedAt})` +
+          (withheldStatus.retentionWarning ? "; Harness retention may delete the source" : ""),
+      );
+    }
+    if (losses.length > 0) {
+      humanLines.push(`withheld source loss: ${losses.length} candidate(s)`);
+    }
+    humanLines.push(
+      `hook last run (machine): ${machineHook?.lastRunAt ?? "never"}`,
+      `hook last import (Project): ${projectHook?.finishedAt ?? "never"}` +
+        (projectHook?.outcome ? ` (${projectHook.outcome})` : ""),
+    );
+    for (const entry of discovery.unavailableHarnesses) {
+      humanLines.push(
+        `harness unavailable: ${entry.harnessId}${entry.reason ? ` (${entry.reason})` : ""}`,
+      );
+    }
+    for (const failure of discovery.adapterFailures) {
+      humanLines.push(`harness failure: ${failure.harnessId}: ${failure.message}`);
+    }
+
     return {
       detail: {
         secretDetection: config.secretDetectionEnabled ? "enabled" : "disabled",
@@ -175,14 +227,7 @@ export const sessionModule: SessionModule<SessionConfig> = {
         tombstoneEvents: tombstoneEvents.length,
         pendingCandidates,
         importableCandidates: importable?.count ?? 0,
-        withheldCandidates:
-          withheld?.kind === "withheld"
-            ? {
-                count: withheld.count,
-                oldestFirstFlaggedAt: withheld.oldestFirstFlaggedAt,
-                retentionWarning: withheld.retentionWarning,
-              }
-            : { count: 0, oldestFirstFlaggedAt: null, retentionWarning: false },
+        withheldCandidates: withheldStatus,
         lostWithheldCandidates: { count: losses.length, records: losses },
         hookLiveness: {
           machineLastRunAt: machineHook?.lastRunAt ?? null,
@@ -194,14 +239,9 @@ export const sessionModule: SessionModule<SessionConfig> = {
           unavailable: discovery.unavailableHarnesses,
           failures: discovery.adapterFailures,
         },
-        projection:
-          pointer === null
-            ? { state: "absent" }
-            : {
-                state: head !== null && pointerIsCurrent(pointer, head) ? "fresh" : "stale",
-                storeCommit: pointer.storeCommit,
-              },
+        projection,
       },
+      humanLines,
     };
   },
 };

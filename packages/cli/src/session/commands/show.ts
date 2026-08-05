@@ -92,8 +92,20 @@ export const showCommand: CommandDefinition = {
       ]
         .filter((l): l is string => l !== null)
         .join("\n");
+      // The relation has one truth source in this document: the structured
+      // `subagent` object. The raw projection columns it is built from stay
+      // out, so a consumer cannot read the two representations apart.
+      const {
+        subagentOrigin: _origin,
+        subagentKind: _kind,
+        subagentParent: _parent,
+        subagentParentSession: _parentSession,
+        subagentCount: _count,
+        spawnedSubagents,
+        ...rest
+      } = detail;
       return {
-        json: { session: { ...detail, subagent: subagentJson(detail, detail.spawnedSubagents) } },
+        json: { session: { ...rest, subagent: subagentJson(detail, spawnedSubagents) } },
         human,
       };
     } finally {

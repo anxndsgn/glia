@@ -178,7 +178,7 @@ describe("Session Archive", () => {
     ).toBe("archived");
 
     const status = await runStatus(project, sessionModules, env.env);
-    expect(status.human).toContain("archived=1");
+    expect(status.human).toContain("(1 archived, 0 conflicted)");
     expect(outcomeJson<{ session: { archived: number } }>(status).session.archived).toBe(1);
 
     const beforeNoop = await headOf();
