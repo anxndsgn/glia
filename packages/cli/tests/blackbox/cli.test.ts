@@ -404,10 +404,10 @@ describe("compiled CLI contract", () => {
       const run = await glia(args);
       expect(run.exitCode).toBe(1);
       const doc = JSON.parse(run.stdout) as {
-        error: { code: string; details: { nextSteps: string[] } };
+        error: { code: string; nextSteps: string[] };
       };
       expect(doc.error.code).toBe("NOT_ENROLLED");
-      expect(doc.error.details.nextSteps).toEqual(["glia import"]);
+      expect(doc.error.nextSteps).toEqual(["glia import"]);
       expect(run.stdout).not.toContain("__glia_unenrolled_read__");
     }
     expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();

@@ -67,12 +67,11 @@ export const acceptCommand: CommandDefinition = {
       throw new GliaError(
         "INPUT_REQUIRED",
         "--interactive needs a terminal to render its picker; list candidates and accept them by id instead",
-        {
-          nextSteps: [
-            "glia candidates --status pending --status flagged --json",
-            "glia accept <candidate-id> ...",
-          ],
-        },
+        {},
+        [
+          "glia candidates --status pending --status flagged --json",
+          "glia accept <candidate-id> ...",
+        ],
       );
     }
 
@@ -251,8 +250,8 @@ async function confirmTargets(
                 epoch: classification.epoch,
               }
             : {}),
-          nextSteps: [`glia accept ${candidateId} --yes`],
         },
+        [`glia accept ${candidateId} --yes`],
       );
     }
 

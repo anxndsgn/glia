@@ -64,7 +64,8 @@ describe("explicit Project enrollment", () => {
 
     await expect(loadProjectForRead(env.worktree, env.home)).rejects.toMatchObject({
       code: "STORE_NOT_REALIZED",
-      details: { projectId: "prj_remote_only", nextSteps: ["glia sync"] },
+      details: { projectId: "prj_remote_only" },
+      nextSteps: ["glia sync"],
     });
   });
 

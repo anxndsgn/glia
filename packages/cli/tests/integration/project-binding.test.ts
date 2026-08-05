@@ -312,7 +312,7 @@ describe("Project Binding commands", () => {
         ),
       ).rejects.toMatchObject({
         code: "PROJECT_BUSY",
-        details: { nextSteps: [`glia project forget ${env.worktree}`] },
+        nextSteps: [`glia project forget ${env.worktree}`],
       });
       expect((await readBindings(project.paths.bindingsFile))?.roots).toEqual([env.worktree]);
     } finally {

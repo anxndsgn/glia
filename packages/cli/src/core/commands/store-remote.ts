@@ -51,14 +51,8 @@ export async function runStoreRemoteSet(
       throw new GliaError(
         "INPUT_REQUIRED",
         "store remote set needs confirmation; re-run with --yes to accept or --dry-run to preview",
-        {
-          remote: url,
-          previous,
-          nextSteps: [
-            `glia store remote set ${url} --dry-run`,
-            `glia store remote set ${url} --yes`,
-          ],
-        },
+        { remote: url, previous },
+        [`glia store remote set ${url} --dry-run`, `glia store remote set ${url} --yes`],
       );
     }
     if (!(await confirmProceed(`${preview}\n\nContinue?`))) {

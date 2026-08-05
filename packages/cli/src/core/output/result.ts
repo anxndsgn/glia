@@ -46,10 +46,16 @@ export function renderError(
         formatVersion: JSON_FORMAT_VERSION,
         command,
         ok: false,
-        error: { code: error.code, message: error.message, details: error.details },
+        error: {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          nextSteps: error.nextSteps,
+        },
       }) + "\n",
     );
     return;
   }
-  target.stderr(`error (${error.code}): ${error.message}\n`);
+  const steps = error.nextSteps.map((step) => `  next: ${step}`);
+  target.stderr([`error (${error.code}): ${error.message}`, ...steps].join("\n") + "\n");
 }
