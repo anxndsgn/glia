@@ -67,11 +67,10 @@ export const acceptCommand: CommandDefinition = {
       throw new GliaError(
         "INPUT_REQUIRED",
         "--interactive needs a terminal to render its picker; list candidates and accept them by id instead",
+        // Only the listing is runnable as-is; the accept command needs an
+        // ID from its output, and the message states that in prose.
         {},
-        [
-          "glia candidates --status pending --status flagged --json",
-          "glia accept <candidate-id> ...",
-        ],
+        ["glia candidates --status pending --status flagged --json"],
       );
     }
 

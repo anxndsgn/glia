@@ -104,11 +104,11 @@ export async function runSync(
   assertProjectWritable(project);
   const remote = project.declaration.store.remote;
   if (!remote) {
+    // No runnable next step exists here: the remote URL is the user's to
+    // supply, and the message already states the command shape in prose.
     throw new GliaError(
       "NO_STORE_REMOTE",
       "this Project's Store is local_only; declare a remote with `glia store remote set <url>`",
-      {},
-      ["glia store remote set <url>"],
     );
   }
 
