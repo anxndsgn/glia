@@ -264,7 +264,7 @@ describe("Project Binding commands", () => {
     expect((await readBindings(project.paths.bindingsFile))?.aliases).toEqual([]);
   });
 
-  test("forget warns for a declaration naming another Project and quotes recovery paths", async () => {
+  test("forget points a mismatched declaration at adopt instead of a doomed reclaim", async () => {
     const spacedWorktree = await makeSecondWorktree(env, "My Project");
     const project = await loadProject(spacedWorktree, env.home);
     await writeDeclaration(spacedWorktree, createDeclaration("prj_someone_else"));
@@ -294,11 +294,37 @@ describe("Project Binding commands", () => {
       },
     );
 
-    expect(preview).toContain("No committed glia.json declaration for this Project");
-    expect(preview).toContain(`'${spacedWorktree}'`);
-    expect((forgotten.json as { reclaimCommand: string }).reclaimCommand).toContain(
-      `'${spacedWorktree}'`,
+    // `glia project bind` there would fail with BINDING_CONFLICT every
+    // time, so the preview must never recommend it.
+    expect(preview).toContain("declares project prj_someone_else");
+    expect(preview).toContain(`glia project adopt '${spacedWorktree}'`);
+    expect(preview).not.toContain(`glia project bind ${project.declaration.projectId}`);
+    expect(preview).not.toContain("No committed glia.json declaration for this Project");
+    expect(forgotten.json).toMatchObject({
+      declaredProjectId: "prj_someone_else",
+      reclaimCommand: null,
+      adoptCommand: `glia project adopt '${spacedWorktree}'`,
+    });
+  });
+
+  test("forget still recommends reclaiming a Project its path does not declare away", async () => {
+    const project = await loadProject(env.worktree, env.home);
+    let preview = "";
+    const forgotten = await runProjectForget(
+      machineContext({ inputDisabled: false }),
+      env.worktree,
+      {
+        confirm: async (message) => {
+          preview = message;
+          return true;
+        },
+      },
     );
+
+    expect(preview).toContain(
+      `Re-claim it with \`glia project bind ${project.declaration.projectId} ${env.worktree}\``,
+    );
+    expect(forgotten.json).toMatchObject({ declaredProjectId: null, adoptCommand: null });
   });
 
   test("Binding mutations honor the machine-global lease timeout", async () => {

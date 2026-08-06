@@ -30,6 +30,7 @@ import {
 } from "./session/commands/enrollment-output.ts";
 import {
   projectCommandDefinitions,
+  runProjectAdopt,
   runProjectBind,
   runProjectForget,
   runProjectList,
@@ -414,11 +415,24 @@ for (const definition of projectCommandDefinitions) {
       .argument("[path]", "path to bind (defaults to the current Git worktree)")
       .option("--alias", "claim historical Sessions without enabling hook capture");
   }
+  if (definition.name === "adopt") {
+    command
+      .argument("[path]", "worktree to adopt (defaults to the current Git worktree)")
+      .option("--delete-old", "delete the merged-from Project and its Store after a clean merge");
+  }
   command.action(async (...invocation: unknown[]) => {
     await execute(`project.${definition.name}`, async (flags) => {
       const ctx = machineContext(flags);
       if (definition.name === "list") return await runProjectList(ctx);
       if (definition.name === "forget") return await runProjectForget(ctx, String(invocation[0]));
+      if (definition.name === "adopt") {
+        const adoptOptions = invocation[invocation.length - 2] as { deleteOld?: boolean };
+        return await runProjectAdopt(
+          ctx,
+          invocation[0] === undefined ? undefined : String(invocation[0]),
+          { deleteOld: adoptOptions.deleteOld === true },
+        );
+      }
       const options = invocation[invocation.length - 2] as { alias?: boolean };
       return await runProjectBind(
         ctx,
