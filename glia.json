@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "projectId": "prj_019fcc20-3f6f-7000-a446-812a69de94d6",
+  "store": {
+    "remote": "https://github.com/anxndsgn/glia-sessions"
+  },
+  "secretDetection": {
+    "enabled": true
+  }
+}
