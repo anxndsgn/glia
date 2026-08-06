@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cp, readdir, rm, stat } from "node:fs/promises";
+import { cp, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   runProjectAdopt,
@@ -21,7 +21,11 @@ import {
   readSessionConflict,
   writeConflictLayout,
 } from "../../src/session/domain/conflict.ts";
-import { ledgerEventsFor, readLocalLedgerEvents } from "../../src/session/domain/deletion.ts";
+import {
+  ledgerEventsFor,
+  readLocalLedgerEvents,
+  serializeLedgerFile,
+} from "../../src/session/domain/deletion.ts";
 import { discoverCandidates } from "../../src/session/domain/discover.ts";
 import {
   associateCandidate,
@@ -136,7 +140,9 @@ describe("glia project adopt", () => {
     expect((await readBindings(local.project.paths.bindingsFile))?.roots).toEqual([]);
     expect(await sessionBytes(declared.storeDir, local.sessionId)).toEqual(before);
     expect(before[`session.json`]).toContain("secretDetectionOverride");
-    expect(result.human).toContain("glia sync");
+    // No remote is declared in this fixture, so `glia sync` would fail and
+    // must not be advised; the runnable guidance is declaring a remote.
+    expect(result.human).toContain("glia store remote set");
   });
 
   test("emits one JSON document naming both sides and a pure-binding path nulls the from side", async () => {
@@ -153,7 +159,7 @@ describe("glia project adopt", () => {
       ledgerMigrated: 0,
       fromStoreDir: local.project.paths.storeDir,
       deletedOldProject: false,
-      nextSteps: ["glia sync"],
+      nextSteps: [],
     });
     expect(await pathExists(local.project.paths.projectDir)).toBeTrue();
 
@@ -186,7 +192,8 @@ describe("glia project adopt", () => {
     const local = await makeLocalProjectWithSession(env.worktree, "cc-this-machine");
     await setDeclaredRemote(env.worktree, remote);
 
-    await runProjectAdopt(machineContext(), undefined);
+    const adoptOutcome = await runProjectAdopt(machineContext(), undefined);
+    expect((adoptOutcome.json as { nextSteps: string[] }).nextSteps).toEqual(["glia sync"]);
     const adopted = await loadProject(env.worktree, env.home, { allowMissingStore: true });
     const report = await runSync(adopted, env.env, [sessionModule]);
 
@@ -405,7 +412,7 @@ describe("glia project adopt", () => {
     expect(preview).toContain(DECLARED_ID);
     expect(preview).toContain("Merge 1 Session(s)");
     expect(preview).toContain("destroys its Store Git history");
-    expect(preview).toContain("glia sync");
+    expect(preview).toContain("glia store remote set");
     expect((await readBindings(local.project.paths.bindingsFile))?.roots).toEqual([env.worktree]);
     expect(await new ProjectStore(local.project.paths.storeDir).head()).toBe(headBefore);
     expect(await pathExists(projectPaths(env.home, DECLARED_ID).projectDir)).toBeFalse();
@@ -432,13 +439,95 @@ describe("glia project adopt", () => {
       local.project.declaration.projectId,
     );
 
-    const removed = await runProjectAdopt(machineContext({ inputDisabled: false }), undefined, {
+    const rerun = await runProjectAdopt(machineContext({ inputDisabled: false }), undefined, {
       confirm: async () => true,
       confirmDelete: async () => true,
     });
     // The rebinding already happened, so the rerun has nothing left to merge.
-    expect(removed.json).toMatchObject({ fromProjectId: null, deletedOldProject: null });
+    expect(rerun.json).toMatchObject({ fromProjectId: null, deletedOldProject: null });
     expect(await pathExists(local.project.paths.projectDir)).toBeTrue();
+  });
+
+  test("an accepted interactive delete removes the old Project", async () => {
+    const second = await makeSecondWorktree(env, "delete-accepted");
+    const local = await makeLocalProjectWithSessions(["cc-delete-accepted"], second);
+
+    const removed = await runProjectAdopt(
+      machineContext({ inputDisabled: false, cwd: second }),
+      undefined,
+      {
+        confirm: async () => true,
+        confirmDelete: async () => true,
+      },
+    );
+
+    expect(removed.json).toMatchObject({ merged: 1, deletedOldProject: true });
+    expect(await pathExists(local.project.paths.projectDir)).toBeFalse();
+    const listed = (await runProjectList(machineContext())).json as {
+      projects: { projectId: string }[];
+    };
+    expect(listed.projects.map((entry) => entry.projectId)).not.toContain(
+      local.project.declaration.projectId,
+    );
+  });
+
+  test("a crashed two-phase swap is rolled forward or discarded on the rerun", async () => {
+    const local = await makeLocalProjectWithSessions(["cc-crash-swap"]);
+    const declared = projectPaths(env.home, DECLARED_ID);
+    await new ProjectStore(declared.storeDir).init(DECLARED_ID);
+    const sessionsRoot = join(declared.storeDir, "session", "sessions");
+
+    // A complete incoming unit (marker present) is the crash window between
+    // the swap's rm and rename; a torn one (marker missing) is a crash
+    // mid-copy. The next adopt must finish the first and discard the second.
+    const completeIncoming = join(sessionsRoot, "prior-session.adopt-incoming");
+    await cp(sessionDir(local.project.paths.storeDir, local.sessionIds[0]!), completeIncoming, {
+      recursive: true,
+    });
+    const tornIncoming = join(sessionsRoot, "torn-session.adopt-incoming");
+    await mkdir(join(tornIncoming, "bundle"), { recursive: true });
+    await Bun.write(join(tornIncoming, "bundle", "events.jsonl"), "partial");
+
+    const result = await runProjectAdopt(machineContext(), undefined);
+
+    expect(result.json).toMatchObject({ merged: 1 });
+    expect(await pathExists(join(sessionsRoot, "prior-session"))).toBeTrue();
+    expect(await pathExists(completeIncoming)).toBeFalse();
+    expect(await pathExists(join(sessionsRoot, "torn-session"))).toBeFalse();
+    expect(await pathExists(tornIncoming)).toBeFalse();
+  });
+
+  test("ledger migration never shadows a Session the declared Project holds live", async () => {
+    const second = await makeSecondWorktree(env, "live-holder");
+    const seeded = await makeLocalProjectWithSessions(["cc-live-in-target"], second);
+    await runProjectAdopt(machineContext({ cwd: second }), undefined);
+    const liveSessionId = seeded.sessionIds[0]!;
+
+    // The worktree's own local Project carries only a tombstone for the
+    // Session the declared Project now holds live.
+    const local = await makeMismatchedWorktree();
+    const tombstone = serializeLedgerFile([
+      {
+        unitId: liveSessionId,
+        sourceIdentity: { harnessId: "claude-code", sourceSessionId: "cc-live-in-target" },
+        replicaId: "elsewhere-replica",
+        deletedAt: new Date().toISOString(),
+        epoch: 1,
+      },
+    ]);
+    const ledgerDest = join(local.paths.storeDir, tombstone.path);
+    await mkdir(join(ledgerDest, ".."), { recursive: true });
+    await Bun.write(ledgerDest, tombstone.content);
+    await new ProjectStore(local.paths.storeDir).commitAll("test: tombstone only");
+
+    const result = await runProjectAdopt(machineContext(), undefined);
+
+    expect(result.json).toMatchObject({ ledgerMigrated: 0 });
+    const declared = projectPaths(env.home, DECLARED_ID);
+    expect(await ledgerEventsFor(declared.storeDir, liveSessionId)).toEqual([]);
+    expect(
+      (await candidatesFromSideDir(sessionDir(declared.storeDir, liveSessionId))).length,
+    ).toBeGreaterThan(0);
   });
 
   test("--delete-old removes the old Project once the merge lands", async () => {

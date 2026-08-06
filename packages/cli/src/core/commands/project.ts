@@ -19,7 +19,11 @@ import type { LoadedProject } from "../session-module.ts";
 import { WriterLease, writerLeaseTimeoutMs } from "../store/lease.ts";
 import { ProjectStore } from "../store/store.ts";
 import { git } from "../store/git.ts";
-import { adoptSessionsFrom, type AdoptMergeReport } from "../../session/domain/adopt.ts";
+import {
+  adoptSessionsFrom,
+  emptyAdoptMergeReport,
+  type AdoptMergeReport,
+} from "../../session/domain/adopt.ts";
 import { countSessionsAtHead } from "../../session/storage/store-layout.ts";
 
 export interface MachineCommandContext {
@@ -455,6 +459,7 @@ export interface ProjectAdoptOptions {
 
 interface AdoptSubject {
   worktree: string;
+  declaration: GliaDeclaration;
   toProjectId: string;
   from: BoundPathMatch | null;
   fromPaths: ProjectPaths | null;
@@ -464,18 +469,96 @@ interface AdoptSubject {
   alreadyRoot: boolean;
 }
 
-function adoptPreviewLines(subject: AdoptSubject, declaredRemote: string | null): string[] {
+async function inspectAdopt(ctx: MachineCommandContext, worktree: string): Promise<AdoptSubject> {
+  const declaration = await readDeclaration(worktree);
+  if (declaration === null) {
+    throw new GliaError(
+      "NO_DECLARATION",
+      `worktree ${worktree} has no glia.json declaration to adopt`,
+      { worktree },
+      ["glia project list", "glia import"],
+    );
+  }
+  const toProjectId = declaration.projectId;
+  const matches = await exactPathMatches(ctx.home, worktree);
+  const from = matches.find((match) => match.projectId !== toProjectId) ?? null;
+  const fromPaths = from === null ? null : projectPaths(ctx.home, from.projectId);
+  return {
+    worktree,
+    declaration,
+    toProjectId,
+    from,
+    fromPaths,
+    fromSessionCount:
+      fromPaths !== null && (await new ProjectStore(fromPaths.storeDir).exists())
+        ? await countSessionsAtHead(fromPaths.storeDir)
+        : null,
+    remainingBindings:
+      from === null
+        ? []
+        : [
+            ...new Set(
+              [...from.bindings.roots, ...from.bindings.aliases]
+                .map(normalizeBoundPath)
+                .filter((candidate) => candidate !== worktree),
+            ),
+          ].sort(),
+    alreadyRoot: matches.some((match) => match.projectId === toProjectId && match.kind === "root"),
+  };
+}
+
+function sameAdoptSubject(left: AdoptSubject, right: AdoptSubject): boolean {
+  return (
+    left.toProjectId === right.toProjectId &&
+    (left.from?.projectId ?? null) === (right.from?.projectId ?? null) &&
+    (left.from?.kind ?? null) === (right.from?.kind ?? null) &&
+    left.fromSessionCount === right.fromSessionCount &&
+    left.remainingBindings.join("\0") === right.remainingBindings.join("\0") &&
+    left.alreadyRoot === right.alreadyRoot
+  );
+}
+
+/**
+ * Refuses an impossible deletion before anything is written, so the flag
+ * never half-applies a merge it cannot finish as asked.
+ */
+function refuseImpossibleDeletion(subject: AdoptSubject, retryCommand: string): void {
+  if (subject.from === null) {
+    throw new GliaError(
+      "USAGE",
+      `${subject.worktree} has no other Project to delete: it is already the declared project ${subject.toProjectId}`,
+      { worktree: subject.worktree, projectId: subject.toProjectId },
+      [retryCommand],
+    );
+  }
+  if (subject.remainingBindings.length > 0) {
+    throw new GliaError(
+      "USAGE",
+      `project ${subject.from.projectId} still has ${subject.remainingBindings.length} other Binding(s) and cannot be deleted: ${subject.remainingBindings.join(", ")}`,
+      { projectId: subject.from.projectId, remainingBindings: subject.remainingBindings },
+      [
+        retryCommand,
+        ...subject.remainingBindings.map(
+          (remaining) => `glia project adopt ${shellQuote(remaining)}`,
+        ),
+      ],
+    );
+  }
+}
+
+function adoptPreviewLines(subject: AdoptSubject): string[] {
+  const declaredRemote = subject.declaration.store.remote ?? null;
   const lines = [
     `Adopt the glia.json declaration at ${subject.worktree}: bind it as a root of project ${subject.toProjectId}.`,
   ];
   if (subject.from !== null && subject.fromPaths !== null) {
     lines.push(
       `Unbind ${subject.worktree} from project ${subject.from.projectId} (${subject.from.kind}).`,
-      `Merge ${subject.fromSessionCount === null ? "an unknown number of" : subject.fromSessionCount} Session(s), deletion tombstones, and Candidate associations from ${subject.fromPaths.storeDir} into project ${subject.toProjectId}.`,
+      `Merge ${subject.fromSessionCount === null ? "an unknown number of" : subject.fromSessionCount} Session(s), deletion tombstones, archive markers, and Candidate associations from ${subject.fromPaths.storeDir} into project ${subject.toProjectId}.`,
     );
     if (subject.remainingBindings.length > 0) {
       lines.push(
-        `Project ${subject.from.projectId} keeps ${subject.remainingBindings.length} other binding(s): ${subject.remainingBindings.join(", ")}. It stays alive and cannot be deleted; adopt each of those separately. Candidate ownership moves to ${subject.toProjectId}.`,
+        `Project ${subject.from.projectId} keeps ${subject.remainingBindings.length} other Binding(s): ${subject.remainingBindings.join(", ")}. It stays alive and cannot be deleted; adopt each of those separately. Candidate ownership moves to ${subject.toProjectId}.`,
       );
     } else {
       lines.push(
@@ -484,7 +567,9 @@ function adoptPreviewLines(subject: AdoptSubject, declaredRemote: string | null)
     }
   }
   lines.push(
-    `Nothing is sent over the network. Run \`glia sync\` afterwards to merge with ${declaredRemote ?? "the declared remote"}.`,
+    declaredRemote !== null
+      ? `Nothing is sent over the network. Run \`glia sync\` afterwards to merge with ${declaredRemote}.`
+      : "Nothing is sent over the network. No remote is declared, so nothing syncs until `glia store remote set <url>`.",
   );
   return lines;
 }
@@ -492,14 +577,18 @@ function adoptPreviewLines(subject: AdoptSubject, declaredRemote: string | null)
 /**
  * Accepts the glia.json declaration at a worktree: rebinds the worktree to
  * the declared Project and merges the previously bound Project's Sessions,
- * tombstones, and machine-local associations into it. One direction only —
- * adopt never writes glia.json — purely local, and idempotent.
+ * tombstones, archive markers, and machine-local associations into it. One
+ * direction only — adopt never writes glia.json — purely local, and
+ * idempotent.
  *
- * The whole command runs under the machine-global Bindings lease. The merge
- * takes the target Store's writer lease and then the old Store's, the one
- * path that holds two Store writer leases at once. The merge runs before
- * the rebinding, so an interruption leaves the worktree bound to the old
- * Project and a rerun converges on the same terminal state.
+ * Both prompts run before any lease is taken, and the state the user
+ * approved is re-inspected under the leases (BINDING_CHANGED on drift),
+ * following forget's confirm-then-reverify pattern. The leases are taken
+ * in the writer-then-Bindings direction import uses — Store writer leases
+ * in Project-ID order first, the machine-global Bindings lease last — so
+ * adopt can never form an ABBA cycle with a concurrent capture. The merge
+ * runs before the rebinding, so an interruption leaves the declaration
+ * mismatch in place, which is exactly what a rerun needs to find.
  */
 export async function runProjectAdopt(
   ctx: MachineCommandContext,
@@ -508,150 +597,147 @@ export async function runProjectAdopt(
 ): Promise<CommandOutcome> {
   const worktree = normalizeBoundPath(await resolveWorktreeTopLevel(path ?? ctx.cwd));
   const retryCommand = `glia project adopt ${shellQuote(worktree)}`;
-  const lease = await acquireBindingsLease(ctx, retryCommand);
-  try {
-    const declaration = await readDeclaration(worktree);
-    if (declaration === null) {
+
+  const first = await inspectAdopt(ctx, worktree);
+  if (options.deleteOld === true) refuseImpossibleDeletion(first, retryCommand);
+
+  let deleting = options.deleteOld === true;
+  let approved: AdoptSubject | null = null;
+  if (!ctx.inputDisabled) {
+    approved = first;
+    const confirm = options.confirm ?? confirmProceed;
+    if (!(await confirm(`${adoptPreviewLines(first).join("\n")}\n\nContinue?`))) {
       throw new GliaError(
-        "NO_DECLARATION",
-        `worktree ${worktree} has no glia.json declaration to adopt`,
-        { worktree },
-        ["glia project list", "glia import"],
+        "CANCELLED",
+        "project adopt cancelled; Bindings and Stores are unchanged",
       );
     }
-    const toProjectId = declaration.projectId;
-    const matches = await exactPathMatches(ctx.home, worktree);
-    const from = matches.find((match) => match.projectId !== toProjectId) ?? null;
-    const fromPaths = from === null ? null : projectPaths(ctx.home, from.projectId);
-    const subject: AdoptSubject = {
-      worktree,
-      toProjectId,
-      from,
-      fromPaths,
-      fromSessionCount:
-        fromPaths !== null && (await new ProjectStore(fromPaths.storeDir).exists())
-          ? await countSessionsAtHead(fromPaths.storeDir)
-          : null,
-      remainingBindings:
-        from === null
-          ? []
-          : [
-              ...new Set(
-                [...from.bindings.roots, ...from.bindings.aliases]
-                  .map(normalizeBoundPath)
-                  .filter((candidate) => candidate !== worktree),
-              ),
-            ].sort(),
-      alreadyRoot: matches.some(
-        (match) => match.projectId === toProjectId && match.kind === "root",
-      ),
-    };
+    if (
+      !deleting &&
+      first.from !== null &&
+      first.fromPaths !== null &&
+      first.remainingBindings.length === 0
+    ) {
+      const confirmDelete = options.confirmDelete ?? confirmProceed;
+      deleting = await confirmDelete(
+        `Delete project ${first.from.projectId} and its Store at ${first.fromPaths.projectDir} after the merge completes? Its Sessions will be in project ${first.toProjectId}, but deleting destroys the old Store's Git history, including earlier Revisions.`,
+      );
+    }
+  }
 
-    // Refuse an impossible deletion before anything is written, so the
-    // flag never half-applies a merge it cannot finish as asked.
-    if (options.deleteOld === true) {
-      if (from === null) {
+  const toPaths = projectPaths(ctx.home, first.toProjectId);
+  const lockTargets = [{ id: first.toProjectId, file: toPaths.writerLockFile }];
+  if (first.from !== null && first.fromPaths !== null) {
+    lockTargets.push({ id: first.from.projectId, file: first.fromPaths.writerLockFile });
+  }
+  lockTargets.sort((a, b) => a.id.localeCompare(b.id));
+
+  const writerLeases: WriterLease[] = [];
+  try {
+    for (const target of lockTargets) {
+      writerLeases.push(await acquireStoreLease(target.file, ctx, retryCommand));
+    }
+    const lease = await acquireBindingsLease(ctx, retryCommand);
+    try {
+      const current = await inspectAdopt(ctx, worktree);
+      // A Project-ID drift means the writer leases cover the wrong Stores;
+      // any drift after an interactive preview executes beyond what the
+      // user approved. Both re-run cleanly.
+      const idsMatch =
+        current.toProjectId === first.toProjectId &&
+        (current.from?.projectId ?? null) === (first.from?.projectId ?? null);
+      if (!idsMatch || (approved !== null && !sameAdoptSubject(approved, current))) {
         throw new GliaError(
-          "USAGE",
-          `${worktree} has no other Project to delete: it is already the declared project ${toProjectId}`,
-          { worktree, projectId: toProjectId },
+          "BINDING_CHANGED",
+          `the Binding or Store changed while confirmation was open; review the current state and try again`,
+          { path: worktree },
           [retryCommand],
         );
       }
-      if (subject.remainingBindings.length > 0) {
-        throw new GliaError(
-          "USAGE",
-          `project ${from.projectId} still has ${subject.remainingBindings.length} other binding(s) and cannot be deleted: ${subject.remainingBindings.join(", ")}`,
-          { projectId: from.projectId, remainingBindings: subject.remainingBindings },
-          [
-            retryCommand,
-            ...subject.remainingBindings.map(
-              (remaining) => `glia project adopt ${shellQuote(remaining)}`,
-            ),
-          ],
+      if (deleting) refuseImpossibleDeletion(current, retryCommand);
+
+      const report = await adoptInto(ctx, current, toPaths);
+
+      // Rebinding is last: an interrupted merge leaves the declaration
+      // mismatch in place, which is exactly what a rerun needs to find.
+      if (current.from !== null && current.fromPaths !== null) {
+        current.from.bindings.roots = current.from.bindings.roots.filter(
+          (candidate) => normalizeBoundPath(candidate) !== worktree,
         );
-      }
-    }
-
-    if (!ctx.inputDisabled) {
-      const confirm = options.confirm ?? confirmProceed;
-      const preview = adoptPreviewLines(subject, declaration.store.remote ?? null);
-      if (!(await confirm(`${preview.join("\n")}\n\nContinue?`))) {
-        throw new GliaError(
-          "CANCELLED",
-          "project adopt cancelled; Bindings and Stores are unchanged",
+        current.from.bindings.aliases = current.from.bindings.aliases.filter(
+          (candidate) => normalizeBoundPath(candidate) !== worktree,
         );
+        await writeBindings(current.fromPaths.bindingsFile, current.from.bindings);
       }
-    }
-
-    const toPaths = projectPaths(ctx.home, toProjectId);
-    const report = await adoptInto(ctx, declaration, toPaths, worktree, subject);
-
-    // Rebinding is last: an interrupted merge leaves the declaration
-    // mismatch in place, which is exactly what a rerun needs to find.
-    if (from !== null && fromPaths !== null) {
-      from.bindings.roots = from.bindings.roots.filter(
-        (candidate) => normalizeBoundPath(candidate) !== worktree,
-      );
-      from.bindings.aliases = from.bindings.aliases.filter(
-        (candidate) => normalizeBoundPath(candidate) !== worktree,
-      );
-      await writeBindings(fromPaths.bindingsFile, from.bindings);
-    }
-    const toBindings = await readBindings(toPaths.bindingsFile);
-    if (
-      toBindings !== null &&
-      toBindings.aliases.some((candidate) => normalizeBoundPath(candidate) === worktree)
-    ) {
-      // A historical alias of the declared Project is promoted: adopt
-      // always leaves the worktree admitting capture.
-      toBindings.aliases = toBindings.aliases.filter(
-        (candidate) => normalizeBoundPath(candidate) !== worktree,
-      );
-      await writeBindings(toPaths.bindingsFile, toBindings);
-    }
-    await realizeProject(worktree, toPaths, toProjectId, declaration.store.remote ?? null);
-
-    let deletedOldProject: boolean | null = from === null ? null : false;
-    if (from !== null && fromPaths !== null && subject.remainingBindings.length === 0) {
-      let deleting = options.deleteOld === true;
-      if (!deleting && !ctx.inputDisabled) {
-        const confirmDelete = options.confirmDelete ?? confirmProceed;
-        deleting = await confirmDelete(
-          `Delete project ${from.projectId} and its Store at ${fromPaths.projectDir}? Its Sessions are now in project ${toProjectId}, but deleting destroys the old Store's Git history, including earlier Revisions.`,
+      const toBindings = await readBindings(toPaths.bindingsFile);
+      if (
+        toBindings !== null &&
+        toBindings.aliases.some((candidate) => normalizeBoundPath(candidate) === worktree)
+      ) {
+        // A historical alias of the declared Project is promoted: adopt
+        // always leaves the worktree admitting capture.
+        toBindings.aliases = toBindings.aliases.filter(
+          (candidate) => normalizeBoundPath(candidate) !== worktree,
         );
+        await writeBindings(toPaths.bindingsFile, toBindings);
       }
-      if (deleting) {
-        await rm(fromPaths.projectDir, { recursive: true, force: true });
+      await realizeProject(
+        worktree,
+        toPaths,
+        current.toProjectId,
+        current.declaration.store.remote ?? null,
+      );
+
+      let deletedOldProject: boolean | null = current.from === null ? null : false;
+      if (
+        deleting &&
+        current.from !== null &&
+        current.fromPaths !== null &&
+        current.remainingBindings.length === 0
+      ) {
+        // The old Store's writer lease is still held here, so no writer
+        // commits into the directory while it is removed. A hook that
+        // resolved the old Project before this command started can still
+        // recreate a partial directory afterwards; that residue shows up
+        // as an unreadable entry in `project list` and is safe to remove.
+        await rm(current.fromPaths.projectDir, { recursive: true, force: true });
         deletedOldProject = true;
       }
-    }
 
-    const changed = from !== null || !subject.alreadyRoot;
-    return {
-      json: {
-        path: worktree,
-        fromProjectId: from?.projectId ?? null,
-        toProjectId,
-        changed,
-        merged: report.merged,
-        skipped: report.skipped,
-        conflicts: report.conflicts,
-        ledgerMigrated: report.ledgerMigrated,
-        associationsRewritten: report.associationsRewritten,
-        withheldDropped: report.withheldDropped,
-        fromStoreDir: fromPaths?.storeDir ?? null,
-        fromProjectDir: fromPaths?.projectDir ?? null,
-        remainingBindings: subject.remainingBindings,
-        deletedOldProject,
-        storeCommit: report.storeCommit,
-        projectionFresh: report.projectionFresh,
-        nextSteps: ["glia sync"],
-      },
-      human: adoptHumanLines(subject, report, changed, deletedOldProject).join("\n"),
-    };
+      const declaredRemote = current.declaration.store.remote ?? null;
+      const changed = current.from !== null || !current.alreadyRoot;
+      return {
+        json: {
+          path: worktree,
+          fromProjectId: current.from?.projectId ?? null,
+          toProjectId: current.toProjectId,
+          changed,
+          merged: report.merged,
+          skipped: report.skipped,
+          conflicts: report.conflicts,
+          ledgerMigrated: report.ledgerMigrated,
+          archiveMigrated: report.archiveMigrated,
+          associationsRewritten: report.associationsRewritten,
+          ignoredMigrated: report.ignoredMigrated,
+          withheldDropped: report.withheldDropped,
+          fromStoreDir: current.fromPaths?.storeDir ?? null,
+          fromProjectDir: current.fromPaths?.projectDir ?? null,
+          remainingBindings: current.remainingBindings,
+          deletedOldProject,
+          storeCommit: report.storeCommit,
+          projectionFresh: report.projectionFresh,
+          nextSteps: [
+            ...(report.conflicts > 0 ? ["glia conflicts"] : []),
+            ...(declaredRemote !== null ? ["glia sync"] : []),
+          ],
+        },
+        human: adoptHumanLines(current, report, changed, deletedOldProject).join("\n"),
+      };
+    } finally {
+      lease.release();
+    }
   } finally {
-    lease.release();
+    for (const writerLease of writerLeases.reverse()) writerLease.release();
   }
 }
 
@@ -671,11 +757,15 @@ function adoptHumanLines(
   }
   if (subject.from !== null && subject.fromPaths !== null) {
     lines.push(
-      `Merged ${report.merged} Session(s) from project ${subject.from.projectId} (${report.skipped} already present, ${report.conflicts} frozen as Session Conflicts, ${report.ledgerMigrated} deletion tombstone(s) migrated).`,
+      `Merged ${report.merged} Session(s) from project ${subject.from.projectId} (${report.skipped} already present, ${report.conflicts} frozen as Session Conflicts, ${report.ledgerMigrated} deletion tombstone(s) and ${report.archiveMigrated} archive marker(s) migrated).`,
     );
-    if (report.associationsRewritten > 0 || report.withheldDropped > 0) {
+    if (
+      report.associationsRewritten > 0 ||
+      report.ignoredMigrated > 0 ||
+      report.withheldDropped > 0
+    ) {
       lines.push(
-        `Rewrote ${report.associationsRewritten} Candidate association(s) and dropped ${report.withheldDropped} withheld evaluation(s) into the loss record.`,
+        `Rewrote ${report.associationsRewritten} Candidate association(s), carried over ${report.ignoredMigrated} ignore decision(s), and recorded ${report.withheldDropped} dropped withheld evaluation(s) in the loss record.`,
       );
     }
     if (report.conflicts > 0) {
@@ -686,72 +776,45 @@ function adoptHumanLines(
     lines.push(
       deletedOldProject === true
         ? `Deleted project ${subject.from.projectId} at ${subject.fromPaths.projectDir}.`
-        : `Project ${subject.from.projectId} is kept at ${subject.fromPaths.projectDir}${subject.remainingBindings.length > 0 ? ` with ${subject.remainingBindings.length} other binding(s)` : ""}.`,
+        : `Project ${subject.from.projectId} is kept at ${subject.fromPaths.projectDir}${subject.remainingBindings.length > 0 ? ` with ${subject.remainingBindings.length} other Binding(s)` : ""}.`,
     );
   }
-  lines.push("Run `glia sync` to merge with the declared remote.");
+  lines.push(
+    subject.declaration.store.remote != null
+      ? "Run `glia sync` to merge with the declared remote."
+      : "No remote is declared; share this Store later with `glia store remote set <url>`.",
+  );
   return lines;
 }
 
 /**
- * Realizes the declared Project's Store, then merges under the fixed lease
- * order: Bindings (already held) → target writer lease → old writer lease.
+ * Realizes the declared Project's Store and runs the merge. The caller
+ * already holds both Stores' writer leases and the Bindings lease.
  */
 async function adoptInto(
   ctx: MachineCommandContext,
-  declaration: GliaDeclaration,
-  toPaths: ProjectPaths,
-  worktree: string,
   subject: AdoptSubject,
+  toPaths: ProjectPaths,
 ): Promise<AdoptMergeReport> {
-  const empty: AdoptMergeReport = {
-    merged: 0,
-    skipped: 0,
-    conflicts: 0,
-    ledgerMigrated: 0,
-    associationsRewritten: 0,
-    withheldDropped: 0,
-    storeCommit: null,
-    projectionFresh: false,
-  };
-  if (subject.from === null || subject.fromPaths === null) return empty;
+  if (subject.from === null || subject.fromPaths === null) return emptyAdoptMergeReport();
 
   await mkdir(toPaths.stateDir, { recursive: true });
   await mkdir(toPaths.cacheDir, { recursive: true });
   // A declared remote is never contacted here: the local Store is created
   // marker-only when absent, and `glia sync` merges the unrelated
   // histories afterwards.
-  await new ProjectStore(toPaths.storeDir).init(declaration.projectId);
+  await new ProjectStore(toPaths.storeDir).init(subject.declaration.projectId);
 
   const identity = (await readReplicaIdentity(ctx.home)) ?? (await createReplicaIdentity(ctx.home));
   const target: LoadedProject = {
     home: ctx.home,
-    worktree,
-    declaration,
+    worktree: subject.worktree,
+    declaration: subject.declaration,
     paths: toPaths,
     replicaId: identity.replicaId,
     enrollment: { kind: "enrolled" },
   };
-
-  const toLease = await acquireStoreLease(toPaths.writerLockFile, ctx, retryAdopt(worktree));
-  try {
-    const fromLease = await acquireStoreLease(
-      subject.fromPaths.writerLockFile,
-      ctx,
-      retryAdopt(worktree),
-    );
-    try {
-      return await adoptSessionsFrom(target, subject.fromPaths, subject.from.projectId);
-    } finally {
-      fromLease.release();
-    }
-  } finally {
-    toLease.release();
-  }
-}
-
-function retryAdopt(worktree: string): string {
-  return `glia project adopt ${shellQuote(worktree)}`;
+  return await adoptSessionsFrom(target, subject.fromPaths, subject.from.projectId);
 }
 
 async function acquireStoreLease(

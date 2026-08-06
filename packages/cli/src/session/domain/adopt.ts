@@ -1,5 +1,5 @@
 import { dirname, join } from "node:path";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, readdir, rename, rm } from "node:fs/promises";
 import type { LoadedProject, StoreDeletionEvent } from "../../core/session-module.ts";
 import type { ProjectPaths } from "../../core/project/paths.ts";
 import {
@@ -12,7 +12,13 @@ import {
 import { ProjectStore } from "../../core/store/store.ts";
 import { buildAndPublishLocked } from "../projection/publish.ts";
 import { listSessionIds, sessionDir } from "../storage/store-layout.ts";
-import { candidatesFromSideDir, isSessionConflicted, writeConflictLayout } from "./conflict.ts";
+import {
+  archiveMarkerPath,
+  listArchiveMarkers,
+  mergeArchiveMarker,
+  readArchiveMarker,
+} from "./archive.ts";
+import { candidatesFromSideDir, writeConflictLayout } from "./conflict.ts";
 import {
   isTombstoned,
   mergeLedgerEvents,
@@ -31,21 +37,27 @@ export interface AdoptMergeReport {
   conflicts: number;
   /** Deletion Ledger events replayed into the target Store's epoch slots. */
   ledgerMigrated: number;
+  /** Archive markers created or advanced in the target Store. */
+  archiveMigrated: number;
   /** Candidate associations rewritten from the old Project to the target. */
   associationsRewritten: number;
-  /** Withheld evaluations dropped instead of migrated; their identities become loss records. */
+  /** Machine-local ignore decisions carried over to the target Project. */
+  ignoredMigrated: number;
+  /** Withheld evaluations dropped; each identity-bearing one becomes a loss record. */
   withheldDropped: number;
   storeCommit: string | null;
   projectionFresh: boolean;
 }
 
-function emptyReport(): AdoptMergeReport {
+export function emptyAdoptMergeReport(): AdoptMergeReport {
   return {
     merged: 0,
     skipped: 0,
     conflicts: 0,
     ledgerMigrated: 0,
+    archiveMigrated: 0,
     associationsRewritten: 0,
+    ignoredMigrated: 0,
     withheldDropped: 0,
     storeCommit: null,
     projectionFresh: false,
@@ -66,32 +78,95 @@ function compareIncoming(a: StoreDeletionEvent, b: StoreDeletionEvent): number {
 }
 
 /**
+ * Sibling build directory for the two-phase unit swap. A unit is built
+ * next to its final path with its marker file written last, then swapped
+ * in with an atomic rename. A crash therefore leaves either a torn
+ * incoming directory (marker missing — discarded on rerun) or a complete
+ * one (rolled forward on rerun); the final directory is never destroyed
+ * before its full replacement is on disk.
+ */
+const INCOMING_SUFFIX = ".adopt-incoming";
+const CONFLICT_MARKER = join("conflict", "conflict.json");
+const SESSION_MARKER = "session.json";
+
+async function fileExists(path: string): Promise<boolean> {
+  return await Bun.file(path).exists();
+}
+
+async function markerRelPathOf(unitDir: string): Promise<string> {
+  return (await fileExists(join(unitDir, CONFLICT_MARKER))) ? CONFLICT_MARKER : SESSION_MARKER;
+}
+
+/** Copies a Session unit, writing its marker file last. */
+async function copyUnitMarkerLast(srcDir: string, destDir: string): Promise<void> {
+  const marker = await markerRelPathOf(srcDir);
+  const markerAbs = join(srcDir, marker);
+  await rm(destDir, { recursive: true, force: true });
+  await mkdir(dirname(destDir), { recursive: true });
+  await cp(srcDir, destDir, {
+    recursive: true,
+    filter: (source) => source !== markerAbs,
+  });
+  await mkdir(dirname(join(destDir, marker)), { recursive: true });
+  await cp(markerAbs, join(destDir, marker));
+}
+
+async function swapInUnit(incomingDir: string, finalDir: string): Promise<void> {
+  await rm(finalDir, { recursive: true, force: true });
+  await rename(incomingDir, finalDir);
+}
+
+/** Completes or discards incoming units a crashed earlier run left behind. */
+async function rollForwardIncomingUnits(toStoreDir: string): Promise<void> {
+  const container = dirname(sessionDir(toStoreDir, "unit"));
+  let entries: string[];
+  try {
+    entries = await readdir(container);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.endsWith(INCOMING_SUFFIX)) continue;
+    const incoming = join(container, entry);
+    const final = join(container, entry.slice(0, -INCOMING_SUFFIX.length));
+    if ((await candidatesFromSideDir(incoming)).length > 0) {
+      await swapInUnit(incoming, final);
+    } else {
+      await rm(incoming, { recursive: true, force: true });
+    }
+  }
+}
+
+/**
  * Replays every Session the old Project holds into the adopting Project's
- * Store, then migrates its Deletion Ledger and machine-local discovery
- * state. Session-level replay, never a directory move: the Store marker
- * records the Project ID, so a whole-Store move would be a STORE_MISMATCH.
+ * Store, then migrates its Deletion Ledger, archive markers, and
+ * machine-local discovery state. Session-level replay, never a directory
+ * move: the Store marker records the Project ID, so a whole-Store move
+ * would be a STORE_MISMATCH.
  *
  * The caller owns the machine-global Bindings lease and both Stores'
- * writer leases (target first, source second), so the source's Current
- * Revision is read without a concurrent hook capture tearing it.
+ * writer leases, so the source's Current Revision is read without a
+ * concurrent hook capture tearing it.
  */
 export async function adoptSessionsFrom(
   target: LoadedProject,
   fromPaths: ProjectPaths,
   fromProjectId: string,
 ): Promise<AdoptMergeReport> {
-  const report = emptyReport();
+  const report = emptyAdoptMergeReport();
   const toStoreDir = target.paths.storeDir;
   const toProjectId = target.declaration.projectId;
   const store = new ProjectStore(toStoreDir);
   await prepareStoreForWrite(store, toProjectId, {
     recoveryDetails: { projectId: toProjectId, replicaId: target.replicaId },
   });
+  await rollForwardIncomingUnits(toStoreDir);
 
   const fromStoreDir = fromPaths.storeDir;
   if (await new ProjectStore(fromStoreDir).exists()) {
     await mergeSessionUnits(toStoreDir, fromStoreDir, target.paths.stagingRoot, report);
     report.ledgerMigrated = await migrateLedger(toStoreDir, fromStoreDir, toProjectId);
+    report.archiveMigrated = await migrateArchiveMarkers(toStoreDir, fromStoreDir);
   }
 
   const trailer = JSON.stringify({
@@ -111,6 +186,7 @@ export async function adoptSessionsFrom(
 
   const local = await migrateDiscoveryState(fromPaths, target.paths, fromProjectId, toProjectId);
   report.associationsRewritten = local.associationsRewritten;
+  report.ignoredMigrated = local.ignoredMigrated;
   report.withheldDropped = local.withheldDropped;
 
   try {
@@ -139,6 +215,7 @@ async function mergeSessionUnits(
       if (fromCandidates.length === 0) continue;
 
       const toDir = sessionDir(toStoreDir, sessionId);
+      const incoming = `${toDir}${INCOMING_SUFFIX}`;
       const toCandidates = await candidatesFromSideDir(toDir);
       if (toCandidates.length === 0) {
         // A Source Identity this Store deliberately deleted is never
@@ -147,13 +224,11 @@ async function mergeSessionUnits(
           report.skipped += 1;
           continue;
         }
-        const stage = join(staging, sessionId, "from");
-        await cp(fromDir, stage, { recursive: true });
-        await rm(toDir, { recursive: true, force: true });
-        await mkdir(dirname(toDir), { recursive: true });
-        await cp(stage, toDir, { recursive: true });
+        await copyUnitMarkerLast(fromDir, incoming);
+        const frozen = await fileExists(join(incoming, CONFLICT_MARKER));
+        await swapInUnit(incoming, toDir);
         // A frozen conflict migrates whole, candidates intact, and stays frozen.
-        if (await isSessionConflicted(toStoreDir, sessionId)) report.conflicts += 1;
+        if (frozen) report.conflicts += 1;
         else report.merged += 1;
         continue;
       }
@@ -166,17 +241,21 @@ async function mergeSessionUnits(
         continue;
       }
 
-      // Both sides carry content the other lacks. Stage both before
-      // writing: the conflict layout replaces the target directory the
-      // target's own candidates are read from.
+      // Both sides carry content the other lacks. The layout is built in
+      // staging from copies of both sides, then swapped in whole, so the
+      // target directory holds either its old content or the complete
+      // conflict layout at every instant.
       const stageFrom = join(staging, sessionId, "from");
       const stageTo = join(staging, sessionId, "to");
+      const stageStore = join(staging, sessionId, "store");
       await cp(fromDir, stageFrom, { recursive: true });
       await cp(toDir, stageTo, { recursive: true });
-      await writeConflictLayout(toStoreDir, sessionId, [
+      await writeConflictLayout(stageStore, sessionId, [
         ...(await candidatesFromSideDir(stageFrom)),
         ...(await candidatesFromSideDir(stageTo)),
       ]);
+      await copyUnitMarkerLast(sessionDir(stageStore, sessionId), incoming);
+      await swapInUnit(incoming, toDir);
       report.conflicts += 1;
     }
   } finally {
@@ -188,6 +267,13 @@ async function mergeSessionUnits(
  * Replays the old Store's deletion events into the target's own epoch
  * slots and advances its marker to the largest slot it handed out, so a
  * later sync's renumbering and ever-synchronized decisions keep working.
+ *
+ * Events whose Session the target holds live are never migrated: the
+ * target's evidence wins, exactly as its tombstones win over the source's
+ * live Sessions in mergeSessionUnits. Migrating such an event would enter
+ * the ledger without the history rewrite the deletion protocol pairs it
+ * with, and the next sync would propagate a deletion nobody in the
+ * target Project decided.
  */
 async function migrateLedger(
   toStoreDir: string,
@@ -198,8 +284,16 @@ async function migrateLedger(
   if (fromEvents.length === 0) return 0;
   const toEvents = await readLocalLedgerEvents(toStoreDir);
   const known = new Set(toEvents.map(eventKey));
-  const incoming = fromEvents.filter((event) => !known.has(eventKey(event))).sort(compareIncoming);
+  const incoming: StoreDeletionEvent[] = [];
+  for (const event of fromEvents) {
+    if (known.has(eventKey(event))) continue;
+    const liveInTarget =
+      (await candidatesFromSideDir(sessionDir(toStoreDir, event.unitId))).length > 0;
+    if (liveInTarget) continue;
+    incoming.push(event);
+  }
   if (incoming.length === 0) return 0;
+  incoming.sort(compareIncoming);
 
   const markerBefore = markerEpoch(await readLocalStoreMarker(toStoreDir));
   let slot = toEvents.reduce((max, event) => Math.max(max, event.epoch), markerBefore);
@@ -225,22 +319,47 @@ async function migrateLedger(
 }
 
 /**
+ * Unions the old Store's archive markers into the target, applying the
+ * marker-level deterministic rule to overlaps — the same surface sync's
+ * archive unit merge covers, so adopt's merge is not narrower than sync's.
+ */
+async function migrateArchiveMarkers(toStoreDir: string, fromStoreDir: string): Promise<number> {
+  let migrated = 0;
+  for (const marker of await listArchiveMarkers(fromStoreDir)) {
+    const existing = await readArchiveMarker(toStoreDir, marker.sessionId);
+    const next = existing === null ? marker : mergeArchiveMarker(existing, marker);
+    if (next === existing) continue;
+    const dest = join(toStoreDir, archiveMarkerPath(marker.sessionId));
+    await mkdir(dirname(dest), { recursive: true });
+    await Bun.write(dest, JSON.stringify(next, null, 2) + "\n");
+    migrated += 1;
+  }
+  return migrated;
+}
+
+/**
  * Machine-local ownership follows the adopting Project: explicit Candidate
- * associations are rewritten to it, while withheld evaluations are not
- * migrated — their identities become loss records under the adopting
- * Project, matching the existing pruning semantics.
+ * associations and ignore decisions carry over, while the adopting
+ * Project's own existing decisions always win over the merged-from side.
+ * Withheld evaluations are not migrated — each identity-bearing one
+ * becomes a loss record under the adopting Project, matching the existing
+ * pruning semantics.
  */
 async function migrateDiscoveryState(
   fromPaths: ProjectPaths,
   toPaths: ProjectPaths,
   fromProjectId: string,
   toProjectId: string,
-): Promise<{ associationsRewritten: number; withheldDropped: number }> {
+): Promise<{ associationsRewritten: number; ignoredMigrated: number; withheldDropped: number }> {
   const fromState = await readDiscoveryState(fromPaths.discoveryFile);
   const toState = await readDiscoveryState(toPaths.discoveryFile);
   let associationsRewritten = 0;
+  let ignoredMigrated = 0;
   for (const [candidateId, association] of Object.entries(fromState.associations)) {
     if (association.projectId !== fromProjectId) continue;
+    if (toState.associations[candidateId] !== undefined || toState.ignored.includes(candidateId)) {
+      continue;
+    }
     associateCandidate(toState, candidateId, toProjectId, association.decidedAt);
     fromState.associations[candidateId] = {
       projectId: toProjectId,
@@ -248,11 +367,21 @@ async function migrateDiscoveryState(
     };
     associationsRewritten += 1;
   }
+  for (const candidateId of fromState.ignored) {
+    if (toState.ignored.includes(candidateId) || toState.associations[candidateId] !== undefined) {
+      continue;
+    }
+    toState.ignored.push(candidateId);
+    ignoredMigrated += 1;
+  }
 
   const prunedAt = new Date().toISOString();
   const losses: WithheldLossRecord[] = [];
-  const withheldDropped = Object.keys(fromState.evaluations).length;
+  const evaluationCount = Object.keys(fromState.evaluations).length;
   for (const [candidateId, evaluation] of Object.entries(fromState.evaluations)) {
+    // A legacy evaluation without an identity leaves nothing citable to
+    // record; it is dropped without a loss record and without being
+    // counted as one.
     if (evaluation.identity !== undefined) {
       losses.push({
         candidateId,
@@ -266,9 +395,11 @@ async function migrateDiscoveryState(
   // Record the evidence before dropping the evaluation it describes.
   await appendWithheldLosses(toPaths.withheldLossFile, losses);
 
-  if (associationsRewritten > 0) await writeDiscoveryState(toPaths.discoveryFile, toState);
-  if (associationsRewritten > 0 || withheldDropped > 0) {
+  if (associationsRewritten > 0 || ignoredMigrated > 0) {
+    await writeDiscoveryState(toPaths.discoveryFile, toState);
+  }
+  if (associationsRewritten > 0 || evaluationCount > 0) {
     await writeDiscoveryState(fromPaths.discoveryFile, fromState);
   }
-  return { associationsRewritten, withheldDropped };
+  return { associationsRewritten, ignoredMigrated, withheldDropped: losses.length };
 }
