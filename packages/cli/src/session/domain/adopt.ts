@@ -78,16 +78,24 @@ function compareIncoming(a: StoreDeletionEvent, b: StoreDeletionEvent): number {
 }
 
 /**
- * Sibling build directory for the two-phase unit swap. A unit is built
- * next to its final path with its marker file written last, then swapped
- * in with an atomic rename. A crash therefore leaves either a torn
- * incoming directory (marker missing — discarded on rerun) or a complete
- * one (rolled forward on rerun); the final directory is never destroyed
- * before its full replacement is on disk.
+ * Build area for the two-phase unit swap, deliberately inside the Store's
+ * `.git` directory: it shares the worktree's filesystem (so the swap's
+ * rename stays atomic) while staying invisible to git, so no recovery
+ * commit — adopt's own or any other writer's — can capture in-progress
+ * bytes under a path the deletion protocol's history rewrite would never
+ * purge. A unit is built here with its marker file written last, then
+ * swapped in; a crash therefore leaves either a torn incoming unit
+ * (marker missing — discarded on rerun) or a complete one (reconciled on
+ * rerun), and the final directory is never destroyed before its full
+ * replacement is on disk.
  */
-const INCOMING_SUFFIX = ".adopt-incoming";
+const INCOMING_DIR = join(".git", "glia-adopt-incoming");
 const CONFLICT_MARKER = join("conflict", "conflict.json");
 const SESSION_MARKER = "session.json";
+
+function incomingUnitDir(toStoreDir: string, sessionId: string): string {
+  return join(toStoreDir, INCOMING_DIR, sessionId);
+}
 
 async function fileExists(path: string): Promise<boolean> {
   return await Bun.file(path).exists();
@@ -112,28 +120,55 @@ async function copyUnitMarkerLast(srcDir: string, destDir: string): Promise<void
 }
 
 async function swapInUnit(incomingDir: string, finalDir: string): Promise<void> {
+  await mkdir(dirname(finalDir), { recursive: true });
   await rm(finalDir, { recursive: true, force: true });
   await rename(incomingDir, finalDir);
 }
 
-/** Completes or discards incoming units a crashed earlier run left behind. */
-async function rollForwardIncomingUnits(toStoreDir: string): Promise<void> {
-  const container = dirname(sessionDir(toStoreDir, "unit"));
+/**
+ * Reconciles incoming units a crashed earlier run left behind. A torn
+ * unit is discarded. A complete one is never allowed to clobber content
+ * the target gained between the crash and the rerun: it swaps in only
+ * when the final directory is empty, is discarded when it carries no
+ * digest the final directory lacks, and otherwise freezes the union of
+ * both sides as a conflict layout — the same digest rule the merge
+ * itself applies.
+ */
+async function rollForwardIncomingUnits(toStoreDir: string, stagingRoot: string): Promise<void> {
   let entries: string[];
   try {
-    entries = await readdir(container);
+    entries = await readdir(join(toStoreDir, INCOMING_DIR));
   } catch {
     return;
   }
-  for (const entry of entries) {
-    if (!entry.endsWith(INCOMING_SUFFIX)) continue;
-    const incoming = join(container, entry);
-    const final = join(container, entry.slice(0, -INCOMING_SUFFIX.length));
-    if ((await candidatesFromSideDir(incoming)).length > 0) {
+  const scratch = join(stagingRoot, `adopt-rollforward-${process.pid}`);
+  await rm(scratch, { recursive: true, force: true });
+  try {
+    for (const sessionId of entries) {
+      const incoming = incomingUnitDir(toStoreDir, sessionId);
+      const incomingCandidates = await candidatesFromSideDir(incoming);
+      if (incomingCandidates.length === 0) {
+        await rm(incoming, { recursive: true, force: true });
+        continue;
+      }
+      const final = sessionDir(toStoreDir, sessionId);
+      const finalCandidates = await candidatesFromSideDir(final);
+      if (finalCandidates.length === 0) {
+        await swapInUnit(incoming, final);
+        continue;
+      }
+      const finalDigests = new Set(finalCandidates.map((c) => c.meta.currentRevision.digest));
+      if (incomingCandidates.every((c) => finalDigests.has(c.meta.currentRevision.digest))) {
+        await rm(incoming, { recursive: true, force: true });
+        continue;
+      }
+      const stageStore = join(scratch, sessionId);
+      await writeConflictLayout(stageStore, sessionId, [...incomingCandidates, ...finalCandidates]);
+      await copyUnitMarkerLast(sessionDir(stageStore, sessionId), incoming);
       await swapInUnit(incoming, final);
-    } else {
-      await rm(incoming, { recursive: true, force: true });
     }
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
   }
 }
 
@@ -160,7 +195,7 @@ export async function adoptSessionsFrom(
   await prepareStoreForWrite(store, toProjectId, {
     recoveryDetails: { projectId: toProjectId, replicaId: target.replicaId },
   });
-  await rollForwardIncomingUnits(toStoreDir);
+  await rollForwardIncomingUnits(toStoreDir, target.paths.stagingRoot);
 
   const fromStoreDir = fromPaths.storeDir;
   if (await new ProjectStore(fromStoreDir).exists()) {
@@ -215,7 +250,7 @@ async function mergeSessionUnits(
       if (fromCandidates.length === 0) continue;
 
       const toDir = sessionDir(toStoreDir, sessionId);
-      const incoming = `${toDir}${INCOMING_SUFFIX}`;
+      const incoming = incomingUnitDir(toStoreDir, sessionId);
       const toCandidates = await candidatesFromSideDir(toDir);
       if (toCandidates.length === 0) {
         // A Source Identity this Store deliberately deleted is never
@@ -260,6 +295,7 @@ async function mergeSessionUnits(
     }
   } finally {
     await rm(staging, { recursive: true, force: true });
+    await rm(join(toStoreDir, INCOMING_DIR), { recursive: true, force: true });
   }
 }
 
@@ -355,16 +391,22 @@ async function migrateDiscoveryState(
   const toState = await readDiscoveryState(toPaths.discoveryFile);
   let associationsRewritten = 0;
   let ignoredMigrated = 0;
+  let fromChanged = false;
   for (const [candidateId, association] of Object.entries(fromState.associations)) {
     if (association.projectId !== fromProjectId) continue;
-    if (toState.associations[candidateId] !== undefined || toState.ignored.includes(candidateId)) {
-      continue;
-    }
-    associateCandidate(toState, candidateId, toProjectId, association.decidedAt);
+    // Ownership moves to the adopting Project on every path: even when the
+    // target's own decision wins and nothing is added there, the source
+    // association is re-pointed so a still-alive old Project stops
+    // classifying the Candidate as its own.
     fromState.associations[candidateId] = {
       projectId: toProjectId,
       decidedAt: association.decidedAt,
     };
+    fromChanged = true;
+    if (toState.associations[candidateId] !== undefined || toState.ignored.includes(candidateId)) {
+      continue;
+    }
+    associateCandidate(toState, candidateId, toProjectId, association.decidedAt);
     associationsRewritten += 1;
   }
   for (const candidateId of fromState.ignored) {
@@ -398,7 +440,7 @@ async function migrateDiscoveryState(
   if (associationsRewritten > 0 || ignoredMigrated > 0) {
     await writeDiscoveryState(toPaths.discoveryFile, toState);
   }
-  if (associationsRewritten > 0 || evaluationCount > 0) {
+  if (fromChanged || evaluationCount > 0) {
     await writeDiscoveryState(fromPaths.discoveryFile, fromState);
   }
   return { associationsRewritten, ignoredMigrated, withheldDropped: losses.length };

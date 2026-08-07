@@ -471,30 +471,40 @@ describe("glia project adopt", () => {
     );
   });
 
-  test("a crashed two-phase swap is rolled forward or discarded on the rerun", async () => {
+  test("crashed incoming units are finished, discarded, or reconciled on the rerun", async () => {
     const local = await makeLocalProjectWithSessions(["cc-crash-swap"]);
     const declared = projectPaths(env.home, DECLARED_ID);
     await new ProjectStore(declared.storeDir).init(DECLARED_ID);
     const sessionsRoot = join(declared.storeDir, "session", "sessions");
+    const incomingRoot = join(declared.storeDir, ".git", "glia-adopt-incoming");
+    const srcUnit = sessionDir(local.project.paths.storeDir, local.sessionIds[0]!);
 
-    // A complete incoming unit (marker present) is the crash window between
-    // the swap's rm and rename; a torn one (marker missing) is a crash
-    // mid-copy. The next adopt must finish the first and discard the second.
-    const completeIncoming = join(sessionsRoot, "prior-session.adopt-incoming");
-    await cp(sessionDir(local.project.paths.storeDir, local.sessionIds[0]!), completeIncoming, {
-      recursive: true,
-    });
-    const tornIncoming = join(sessionsRoot, "torn-session.adopt-incoming");
-    await mkdir(join(tornIncoming, "bundle"), { recursive: true });
-    await Bun.write(join(tornIncoming, "bundle", "events.jsonl"), "partial");
+    // A complete incoming unit with no final directory is the crash window
+    // between the swap's rm and rename: the rerun finishes it.
+    await cp(srcUnit, join(incomingRoot, "prior-session"), { recursive: true });
+    // A torn unit (marker missing) is a crash mid-copy: the rerun discards it.
+    await mkdir(join(incomingRoot, "torn-session", "bundle"), { recursive: true });
+    await Bun.write(join(incomingRoot, "torn-session", "bundle", "events.jsonl"), "partial");
+    // A complete incoming unit must not clobber content the target gained
+    // between the crash and the rerun: the divergent pair freezes as a
+    // conflict instead.
+    await cp(srcUnit, join(sessionsRoot, "stale-check"), { recursive: true });
+    await cp(srcUnit, join(incomingRoot, "stale-check"), { recursive: true });
+    const staleMetaFile = join(incomingRoot, "stale-check", "session.json");
+    const staleMeta = JSON.parse(await Bun.file(staleMetaFile).text()) as {
+      currentRevision: { digest: string };
+    };
+    staleMeta.currentRevision.digest = "f".repeat(64);
+    await Bun.write(staleMetaFile, JSON.stringify(staleMeta, null, 2) + "\n");
 
     const result = await runProjectAdopt(machineContext(), undefined);
 
     expect(result.json).toMatchObject({ merged: 1 });
     expect(await pathExists(join(sessionsRoot, "prior-session"))).toBeTrue();
-    expect(await pathExists(completeIncoming)).toBeFalse();
     expect(await pathExists(join(sessionsRoot, "torn-session"))).toBeFalse();
-    expect(await pathExists(tornIncoming)).toBeFalse();
+    const reconciled = await readSessionConflict(declared.storeDir, "stale-check");
+    expect(reconciled?.candidates.length).toBe(2);
+    expect(await pathExists(incomingRoot)).toBeFalse();
   });
 
   test("ledger migration never shadows a Session the declared Project holds live", async () => {
