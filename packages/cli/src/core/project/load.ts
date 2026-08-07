@@ -20,12 +20,23 @@ export interface LoadProjectOptions {
   allowMissingStore?: boolean;
 }
 
+/**
+ * The recovery path leads with `project adopt`: it accepts the
+ * declaration, merges the locally bound Project's Sessions into the
+ * declared one, and is the only command that resolves this state. This
+ * error stays cheap — the Session-level detail belongs to adopt's own
+ * preview, which reads a consistent state under the Bindings lease.
+ */
 function declarationMismatchError(worktree: string, declared: string, owner: string): GliaError {
   return new GliaError(
     "BINDING_CONFLICT",
     `worktree ${worktree} is already bound to project ${owner}, but glia.json declares ${declared}`,
     { worktree, projectId: declared, currentOwner: owner },
-    ["glia project list", `glia project forget ${shellQuote(worktree)}`],
+    [
+      `glia project adopt ${shellQuote(worktree)}`,
+      "glia project list",
+      `glia project forget ${shellQuote(worktree)}`,
+    ],
   );
 }
 
