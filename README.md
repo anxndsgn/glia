@@ -56,9 +56,9 @@ would be captured. Direct requests for a Session (`view`, `show`, and `export`)
 return `NOT_ENROLLED` instead of pretending the Session ID is missing.
 
 Enrollment happens when you run a command that keeps or changes Project data,
-such as `import`, `accept`, `archive`, `delete`, `resolve`, `sync`, `setup`, or
-an applied `store remote set`. Its `--dry-run` preview remains read-only. The
-first interactive `glia import` explains the Store,
+such as `import`, `accept`, `archive`, `delete`, `resolve`, `sync`, `setup`,
+`project adopt`, or an applied `store remote set`. Its `--dry-run` preview remains
+read-only. The first interactive `glia import` explains the Store,
 backlog, secret-withholding, and installed-hook consequences before creating
 the Project, Replica identity, Binding, and local Store under `~/.glia`.
 Scripted `--no-input` and `--json` imports proceed without prompting. Glia does
@@ -78,12 +78,19 @@ glia project list
 glia project forget <path>
 glia project bind <project-id> [path]
 glia project bind <project-id> <historical-path> --alias
+glia project adopt [path] [--delete-old]
 ```
 
 `project forget` removes only the Binding; its Store and Sessions remain. A root
 enables SessionEnd capture, while an alias claims historical Sessions without
-enabling capture at that path. Use `project list` to find rootless Projects,
-missing checkout paths, and Stores that have not yet been synced locally.
+enabling capture at that path. If a worktree's `glia.json` declares a different
+Project than its local Binding, `project adopt` accepts the declaration, merges
+the locally bound Sessions and metadata into the declared Project, and promotes
+the worktree to a capturing root. The merge is local; run `glia sync` afterwards
+when a remote is declared. Use `--delete-old` (or confirm interactively) to remove
+the old Project only when it has no other Bindings. Use `project list` to find
+rootless Projects, missing checkout paths, and Stores that have not yet been
+synced locally.
 
 If a search returns no matches, its human output and JSON `advisories` report
 non-zero importable, pending, and withheld Candidate counts. A search with
@@ -114,8 +121,8 @@ that emits every field.
 Machine setup commands are `setup`, `setup remove`, `hook install|remove`, and
 `skill install|remove`. Store commands are `sync`, `status`, and
 `store remote set|show`. Project Binding commands are `project list`, `project
-forget`, and `project bind`. Every command supports the global `--json` and
-`--no-input` flags, except the deliberately silent `import --hook` path, which
+forget`, `project bind`, and `project adopt`. Every command supports the global
+`--json` and `--no-input` flags, except the deliberately silent `import --hook` path, which
 rejects `--json`.
 
 ## Data and security
