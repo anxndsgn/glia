@@ -383,17 +383,31 @@ async function bootstrapStoreFromRemote(project: LoadedProject, remote: string):
   await rm(scratch, { recursive: true, force: true });
   await mkdir(scratch, { recursive: true });
   try {
-    await gitOrThrow(["clone", remote, cloneDir], project.home);
-    const hasHistory =
-      (await git(["rev-parse", "--verify", "--quiet", "HEAD"], cloneDir)).exitCode === 0;
-    if (hasHistory) {
+    // The Store protocol always uses main, independently of the remote's
+    // default branch or a dangling remote HEAD. Validate before checkout.
+    await gitOrThrow(["clone", "--no-checkout", remote, cloneDir], project.home);
+    const mainRef = "refs/remotes/origin/main";
+    const refs = (await gitOrThrow(["for-each-ref", "--format=%(refname)"], cloneDir))
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    if (refs.includes(mainRef)) {
+      const mainHead = (await gitOrThrow(["rev-parse", mainRef], cloneDir)).trim();
       validateStoreMarker(
-        await readStoreMarkerAtRev(cloneDir, "HEAD", remote),
+        await readStoreMarkerAtRev(cloneDir, mainHead, remote),
         project.declaration.projectId,
         remote,
       );
-      await writeRemoteTrackingHead(cloneDir, remote, "HEAD");
+      await gitOrThrow(["checkout", "-B", "main", mainHead], cloneDir);
+      await writeRemoteTrackingHead(cloneDir, remote, mainHead);
     } else {
+      if (refs.length > 0) {
+        throw new GliaError(
+          "STORE_MISMATCH",
+          `${remote} has history but no main branch; a Glia Store must use refs/heads/main`,
+          { source: remote, reason: "missing_main" },
+        );
+      }
       await gitOrThrow(["symbolic-ref", "HEAD", "refs/heads/main"], cloneDir);
       await Bun.write(
         join(cloneDir, STORE_MARKER_FILE),

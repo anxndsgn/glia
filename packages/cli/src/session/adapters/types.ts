@@ -166,6 +166,9 @@ export interface SessionHarnessAdapter {
 
   inspectAvailability(context: DiscoveryContext): Promise<HarnessAvailability>;
   discover(context: DiscoveryContext): AsyncIterable<SessionCandidate>;
+  /** Re-read the known transcript and its complete current evidence allowlist.
+   * Missing sources return null; callers rediscover moved or changed identities. */
+  refreshCandidate(candidate: SessionCandidate): Promise<SessionCandidate | null>;
   capture(candidate: SessionCandidate, staging: StagingArea): Promise<CapturedBundle>;
   project(bundle: StoredSourceBundle): AsyncIterable<NormalizedEvent>;
 }

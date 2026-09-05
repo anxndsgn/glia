@@ -83,6 +83,48 @@ async function headOf(project: LoadedProject): Promise<string> {
 }
 
 describe("glia sync", () => {
+  for (const defaultBranch of ["other", "missing"]) {
+    test(`bootstrap checks out main when the remote HEAD names ${defaultBranch}`, async () => {
+      const projectA = await machineA();
+      const reportA = await sync(projectA, envA.env);
+      const remoteDir = Bun.fileURLToPath(projectA.declaration.store.remote!);
+      if (defaultBranch === "other") {
+        await gitOrThrow(["branch", "other", "main"], remoteDir);
+      }
+      await gitOrThrow(["symbolic-ref", "HEAD", `refs/heads/${defaultBranch}`], remoteDir);
+
+      const b = await makeSecondReplica(envA, "b");
+      const projectB = await initAt(b.worktree, b.home);
+      expect((await gitOrThrow(["branch", "--show-current"], projectB.paths.storeDir)).trim()).toBe(
+        "main",
+      );
+      expect(await headOf(projectB)).toBe(reportA.head);
+      await writeClaudeSession(b.claudeHome, { sessionId: "bootstrap-b", cwd: b.worktree });
+      await importInto(projectB, b.env);
+      const reportB = await sync(projectB, b.env);
+      expect(reportB.pushed).toBe(1);
+      await sync(projectA, envA.env);
+      expect(await listSessionIds(projectA.paths.storeDir)).toHaveLength(2);
+    });
+  }
+
+  test("bootstrap refuses remote history that has no main branch", async () => {
+    const projectA = await machineA();
+    await sync(projectA, envA.env);
+    const remoteDir = Bun.fileURLToPath(projectA.declaration.store.remote!);
+    await gitOrThrow(["branch", "-m", "main", "other"], remoteDir);
+    const b = await makeSecondReplica(envA, "b");
+    await expect(initAt(b.worktree, b.home)).rejects.toThrow(
+      expect.objectContaining({ code: "STORE_MISMATCH" }) as Error,
+    );
+    expect(
+      await new ProjectStore(
+        projectPaths(b.home, projectA.declaration.projectId).storeDir,
+      ).exists(),
+    ).toBeFalse();
+    expect((await gitOrThrow(["branch", "--list", "main"], remoteDir)).trim()).toBe("");
+  });
+
   test("clean-machine recovery: machine B bootstraps through init and queries byte-identical sessions", async () => {
     const projectA = await machineA();
     const reportA = await sync(projectA, envA.env);

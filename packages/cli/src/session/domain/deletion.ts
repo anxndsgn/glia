@@ -1,5 +1,5 @@
 import { dirname, join } from "node:path";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import type { LoadedProject, StoreDeletionEvent } from "../../core/session-module.ts";
 import type { HarnessId } from "../../core/harnesses/ids.ts";
 import { GliaError } from "../../core/output/errors.ts";
@@ -201,16 +201,19 @@ export async function collapseLocalState(
 /** Reads the Deletion Ledger from the Store working tree (local head). */
 export async function readLocalLedgerEvents(storeDir: string): Promise<StoreDeletionEvent[]> {
   const dir = join(storeDir, SESSION_LEDGER_DIR);
-  const events: StoreDeletionEvent[] = [];
+  let names: string[];
   try {
-    const { readdir } = await import("node:fs/promises");
-    for (const name of (await readdir(dir)).sort()) {
-      if (!name.endsWith(".json")) continue;
-      const content = await Bun.file(join(dir, name)).text();
-      events.push(...parseLedgerFile(`${SESSION_LEDGER_DIR}/${name}`, content));
-    }
-  } catch {
+    names = await readdir(dir);
+  } catch (error) {
     // No ledger namespace yet: a Store that has never deleted.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const events: StoreDeletionEvent[] = [];
+  for (const name of names.sort()) {
+    if (!name.endsWith(".json")) continue;
+    const content = await Bun.file(join(dir, name)).text();
+    events.push(...parseLedgerFile(`${SESSION_LEDGER_DIR}/${name}`, content));
   }
   return sortEvents(events);
 }

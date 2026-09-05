@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database, SQLiteError } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { GliaError } from "../output/errors.ts";
@@ -27,7 +27,14 @@ export class WriterLease {
       try {
         db.run("BEGIN IMMEDIATE");
         return new WriterLease(db);
-      } catch {
+      } catch (error) {
+        if (
+          !(error instanceof SQLiteError) ||
+          (error.code !== "SQLITE_BUSY" && error.code !== "SQLITE_LOCKED")
+        ) {
+          db.close();
+          throw error;
+        }
         if (Date.now() >= deadline) {
           db.close();
           throw new GliaError(

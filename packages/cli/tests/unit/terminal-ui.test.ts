@@ -176,6 +176,10 @@ describe("prompt text layout", () => {
     expect(wrapLines("", 20, 2)).toEqual([]);
   });
 
+  test("the final detail row continues from the current occurrence of a repeated word", () => {
+    expect(wrapLines("alpha beta alpha gamma", 10, 2)).toEqual(["alpha beta", "alpha gam…"]);
+  });
+
   test("the name column yields to the description's floor, but never disappears", () => {
     expect(nameColumnWidth(["short"], 80)).toBe(5);
     expect(nameColumnWidth(["x".repeat(60)], 80)).toBe(34);

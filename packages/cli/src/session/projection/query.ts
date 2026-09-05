@@ -308,7 +308,33 @@ function likePattern(term: string): string {
 }
 
 const FILE_MATCH_SQL = `(t.source_path = $file OR t.normalized_path = $file
-  OR t.source_path LIKE '%/' || $file OR t.normalized_path LIKE '%/' || $file)`;
+  OR substr(t.source_path, -length($file) - 1) = '/' || $file
+  OR substr(t.normalized_path, -length($file) - 1) = '/' || $file)`;
+
+/**
+ * Sortable UTC instants without changing source evidence. Convert only whole
+ * seconds through SQLite: its date functions lose submillisecond precision.
+ * Keeping fractional digits separately (without trailing zeros) preserves
+ * exact ordering and equality across source precision and offset spellings.
+ */
+function timestampSql(value: string): string {
+  return `(SELECT strftime('%Y-%m-%dT%H:%M:%S', whole || zone) || '.' ||
+      rtrim(substr(tail, 1, length(tail) - length(zone)), '0')
+    FROM (
+      SELECT whole, tail, ltrim(tail, '0123456789') AS zone
+      FROM (
+        SELECT CASE WHEN instr(ts, '.') = 0 THEN ts
+                 ELSE substr(ts, 1, instr(ts, '.') - 1) END AS whole,
+               CASE WHEN instr(ts, '.') = 0 THEN ''
+                 ELSE substr(ts, instr(ts, '.') + 1) END AS tail
+        FROM (
+          SELECT CASE WHEN substr(${value}, -5) GLOB '[+-][0-9][0-9][0-9][0-9]'
+            THEN substr(${value}, 1, length(${value}) - 2) || ':' || substr(${value}, -2)
+            ELSE ${value} END AS ts
+        )
+      )
+    ))`;
+}
 
 type Bindings = Record<string, string | number>;
 
@@ -321,7 +347,7 @@ function mechanicalClauses(params: SearchParams, bind: Bindings): string[] {
     bind["$harness"] = params.harness;
   }
   if (params.since) {
-    clauses.push("e.timestamp >= $since");
+    clauses.push(`${timestampSql("e.timestamp")} >= ${timestampSql("$since")}`);
     bind["$since"] = params.since;
   }
   const filterUnion = params.filters.map((f, i) => filterClause(f, i, bind));
@@ -399,12 +425,13 @@ interface BoundedMatchedRow extends MatchedRow {
 
 /**
  * SQL ordering for the no-family fast path. SQL has already chosen each
- * Session's best-ranked matches; eventSeq restores source order for display.
+ * Session's best-ranked matches; rn retains that priority when the global
+ * limit cuts through a Session. finishBoundedSearch restores source order.
  */
 function groupOrderSql(sort: SearchSort): string {
   return sort === "time"
-    ? "(c.timeKey IS NULL), c.timeKey, c.sessionId, c.eventSeq"
-    : "c.bestRank, c.sessionId, c.eventSeq";
+    ? "(c.timeKey IS NULL), c.timeKey, c.sessionId, c.rn"
+    : "c.bestRank, c.sessionId, c.rn";
 }
 
 /**

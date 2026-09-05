@@ -1,4 +1,4 @@
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { readdir } from "node:fs/promises";
 import { claudeHome } from "../../../core/harnesses/home.ts";
 import { asObject, asString, readJsonlLines } from "../jsonl.ts";
@@ -79,70 +79,21 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
       const dir = join(projectsDir, entry);
       const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl")).sort();
       for (const fileName of files) {
-        const transcriptPath = join(dir, fileName);
-        const lines = await readJsonlLines(transcriptPath);
-        let sessionId: string | null = null;
-        let openingPath: string | null = null;
-        let parentSessionId: string | null = null;
-        let sessionTime: string | null = null;
-        let customTitle: string | null = null;
-        let aiTitle: string | null = null;
-        let summary: string | null = null;
-        let firstUserText: string | null = null;
-        // Titles appear anywhere in the file, so the whole scan runs; the
-        // lines are already in memory, so this costs no extra I/O. A
-        // re-titled Session records another title line, so the latest one
-        // of a kind is the title the source currently carries.
-        for (const line of lines) {
-          const value = line.value;
-          if (!value) continue;
-          sessionId ??= asString(value["sessionId"]);
-          openingPath ??= asString(value["cwd"]);
-          parentSessionId ??= asString(value["parentSessionId"]);
-          sessionTime ??= asString(value["timestamp"]);
-          switch (value["type"]) {
-            case "custom-title":
-              customTitle = asString(value["customTitle"]) ?? customTitle;
-              break;
-            case "ai-title":
-              aiTitle = asString(value["aiTitle"]) ?? aiTitle;
-              break;
-            case "summary":
-              summary = asString(value["summary"]) ?? summary;
-              break;
-            case "user": {
-              if (firstUserText !== null || value["isMeta"] === true) break;
-              const message = asObject(value["message"]);
-              if (message && !hasBlockOfType(message, "tool_result")) {
-                firstUserText = extractText(message);
-              }
-              break;
-            }
-          }
-        }
-        const stem = basename(fileName, ".jsonl");
-        sessionId ??= stem;
-        const identity = { harnessId: "claude-code" as const, sourceSessionId: sessionId };
-        yield {
-          identity,
-          candidateId: candidateIdOf(identity),
-          // Claude Code subagents are evidence inside their parent Session,
-          // never Sessions of their own, so no candidate is ever a subagent.
-          subagent: null,
-          openingPath,
-          sourceFiles: [
-            {
-              absolutePath: transcriptPath,
-              bundlePath: TRANSCRIPT_BUNDLE_PATH,
-              mediaType: "application/jsonl",
-            },
-            ...(await subagentSourceFiles(join(dir, stem))),
-          ],
-          continuation: parentSessionId ? { parentSessionId } : null,
-          sessionTime,
-          label: sessionLabel(customTitle ?? aiTitle ?? summary ?? firstUserText),
-        };
+        yield await candidateFromTranscript(join(dir, fileName));
       }
+    }
+  },
+
+  async refreshCandidate(candidate: SessionCandidate): Promise<SessionCandidate | null> {
+    const transcript = candidate.sourceFiles.find(
+      (file) => file.bundlePath === TRANSCRIPT_BUNDLE_PATH,
+    );
+    if (transcript === undefined) return null;
+    try {
+      return await candidateFromTranscript(transcript.absolutePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
     }
   },
 
@@ -162,6 +113,72 @@ export const claudeCodeAdapter: SessionHarnessAdapter = {
     }
   },
 };
+
+/** Re-reads one transcript and its current sibling evidence allowlist. */
+async function candidateFromTranscript(transcriptPath: string): Promise<SessionCandidate> {
+  const lines = await readJsonlLines(transcriptPath);
+  let sessionId: string | null = null;
+  let openingPath: string | null = null;
+  let parentSessionId: string | null = null;
+  let sessionTime: string | null = null;
+  let customTitle: string | null = null;
+  let aiTitle: string | null = null;
+  let summary: string | null = null;
+  let firstUserText: string | null = null;
+  // Titles appear anywhere in the file, so the whole scan runs; the
+  // lines are already in memory, so this costs no extra I/O. A
+  // re-titled Session records another title line, so the latest one
+  // of a kind is the title the source currently carries.
+  for (const line of lines) {
+    const value = line.value;
+    if (!value) continue;
+    sessionId ??= asString(value["sessionId"]);
+    openingPath ??= asString(value["cwd"]);
+    parentSessionId ??= asString(value["parentSessionId"]);
+    sessionTime ??= asString(value["timestamp"]);
+    switch (value["type"]) {
+      case "custom-title":
+        customTitle = asString(value["customTitle"]) ?? customTitle;
+        break;
+      case "ai-title":
+        aiTitle = asString(value["aiTitle"]) ?? aiTitle;
+        break;
+      case "summary":
+        summary = asString(value["summary"]) ?? summary;
+        break;
+      case "user": {
+        if (firstUserText !== null || value["isMeta"] === true) break;
+        const message = asObject(value["message"]);
+        if (message && !hasBlockOfType(message, "tool_result")) {
+          firstUserText = extractText(message);
+        }
+        break;
+      }
+    }
+  }
+  const stem = basename(transcriptPath, ".jsonl");
+  sessionId ??= stem;
+  const identity = { harnessId: "claude-code" as const, sourceSessionId: sessionId };
+  return {
+    identity,
+    candidateId: candidateIdOf(identity),
+    // Claude Code subagents are evidence inside their parent Session,
+    // never Sessions of their own, so no candidate is ever a subagent.
+    subagent: null,
+    openingPath,
+    sourceFiles: [
+      {
+        absolutePath: transcriptPath,
+        bundlePath: TRANSCRIPT_BUNDLE_PATH,
+        mediaType: "application/jsonl",
+      },
+      ...(await subagentSourceFiles(join(dirname(transcriptPath), stem))),
+    ],
+    continuation: parentSessionId ? { parentSessionId } : null,
+    sessionTime,
+    label: sessionLabel(customTitle ?? aiTitle ?? summary ?? firstUserText),
+  };
+}
 
 /**
  * The subagent transcripts a bundle carries, read from its manifest rather
