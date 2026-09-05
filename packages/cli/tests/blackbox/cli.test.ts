@@ -224,6 +224,37 @@ describe("compiled CLI contract", () => {
     expect(doc.error.code).toBe("NOT_ENROLLED");
   });
 
+  test("search --compact selects grouped JSON and rejects human mode", async () => {
+    await writeClaudeSession(env.claudeHome, {
+      sessionId: "compact-binary",
+      cwd: env.worktree,
+      userText: "COMPACTBINARY opening",
+      extraLines: [
+        {
+          type: "user",
+          uuid: "compact-binary-second",
+          sessionId: "compact-binary",
+          cwd: env.worktree,
+          timestamp: "2026-07-15T10:01:00Z",
+          message: { role: "user", content: "COMPACTBINARY closing" },
+        },
+      ],
+    });
+    expect((await glia(["--json", "import"])).exitCode).toBe(0);
+    const result = await glia(["--json", "search", "COMPACTBINARY", "--compact", "-C", "2"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim().split("\n")).toHaveLength(1);
+    const doc = JSON.parse(result.stdout);
+    expect(doc).toMatchObject({ formatVersion: 1, ok: true, command: "search" });
+    expect(doc.result.layout).toBe("grouped");
+    expect(doc.result.groups[0].matches).toHaveLength(2);
+    expect(doc.result.groups[0].sourceFile).toBe("source/transcript.jsonl");
+    const human = await glia(["search", "COMPACTBINARY", "--compact"]);
+    expect(human.exitCode).not.toBe(0);
+    expect(human.stderr).toContain("--compact requires --json");
+  });
+
   test("glia view honors the CLI output contract: human default, one JSON document, USAGE exit", async () => {
     await writeClaudeSession(env.claudeHome, { sessionId: "aaaa-1", cwd: env.worktree });
     const imported = await glia(["--json", "import"]);

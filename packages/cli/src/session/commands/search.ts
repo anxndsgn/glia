@@ -20,6 +20,7 @@ import {
   searchFileTouches,
   searchText,
   type EventFilter,
+  type EvidenceLocator,
   type FileTouchMatch,
   type SessionMatchGroup,
   type SearchParams,
@@ -61,6 +62,11 @@ export const searchCommand: CommandDefinition = {
   ],
   options: [
     {
+      flags: "--compact",
+      description:
+        "use grouped JSON when smaller, inheriting Session fields and reusing context (--json required)",
+    },
+    {
       flags: "--word",
       description:
         "match query terms only at word boundaries (ASCII letters, digits, _);" +
@@ -100,6 +106,10 @@ export const searchCommand: CommandDefinition = {
     },
   ],
   async run(ctx, args, options): Promise<CommandOutcome> {
+    const compact = options["compact"] === true;
+    if (compact && !ctx.jsonMode) {
+      throw new GliaError("USAGE", "--compact requires --json");
+    }
     const query = args[0] ?? null;
     const file = options["file"] !== undefined ? String(options["file"]) : null;
     if (query === null && file === null) {
@@ -144,17 +154,33 @@ export const searchCommand: CommandDefinition = {
       const finish = async <M extends { eventSeq: number; runLastSeq: number }>(
         mode: string,
         result: SearchResult<M>,
-        matchJson: (match: M) => object,
+        matchJson: (match: M) => MatchJson,
         renderMatch: (match: M, seqWidth: number, prefix: string) => string[],
         noun: string,
       ): Promise<CommandOutcome> => {
         const contexts = computeContexts(db, result.groups, context);
+        const flat = { matches: flattenGroups(result.groups, contexts, matchJson) };
+        let entries: object = flat;
+        if (compact) {
+          const grouped = {
+            layout: "grouped",
+            groups: compactGroups(result.groups, contexts, matchJson),
+          };
+          // Sparse queries can cost more as groups. Compare the complete
+          // alternative payloads, including their discriminator and keys.
+          // Bytes are deterministic; token savings depend on the tokenizer.
+          if (
+            Buffer.byteLength(JSON.stringify(grouped)) < Buffer.byteLength(JSON.stringify(flat))
+          ) {
+            entries = grouped;
+          }
+        }
         const outcome: CommandOutcome = {
           json: {
             mode,
             totalMatches: result.totalMatches,
             familyCollapsedMatches: result.familyCollapsedMatches,
-            matches: flattenGroups(result.groups, contexts, matchJson),
+            ...entries,
             parameters,
             projection,
           },
@@ -310,7 +336,7 @@ function computeContexts<M extends { eventSeq: number }>(
 function flattenGroups<M extends { eventSeq: number; runLastSeq: number }>(
   groups: SessionMatchGroup<M>[],
   contexts: Map<string, GroupContext>,
-  matchJson: (match: M) => object,
+  matchJson: (match: M) => MatchJson,
 ): object[] {
   const flat: object[] = [];
   for (const group of groups) {
@@ -339,6 +365,55 @@ function flattenGroups<M extends { eventSeq: number; runLastSeq: number }>(
   return flat;
 }
 
+/** Every match keeps a locator, including its source-native event identity. */
+interface MatchJson {
+  eventSeq: number;
+  locator: EvidenceLocator;
+}
+
+/**
+ * Lossless alternative to the flat JSON layout. Identity belongs to its
+ * Session group; a locator inherits only sourceFile. A different transcript
+ * (including subagent evidence) states its own sourceFile explicitly.
+ * Context windows reference one shared entry per logical event, preserving
+ * each match's window even when neighboring matches overlap.
+ */
+function compactGroups<M extends { eventSeq: number; runLastSeq: number }>(
+  groups: SessionMatchGroup<M>[],
+  contexts: Map<string, GroupContext>,
+  matchJson: (match: M) => MatchJson,
+): object[] {
+  return groups.map((group) => {
+    const matches = group.matches.map(matchJson);
+    const sourceFile = matches[0]!.locator.sourceFile;
+    const groupContext = contexts.get(group.sessionId);
+    const inheritSource = <T extends { locator: EvidenceLocator }>(entry: T) => {
+      const { sourceFile: file, ...locator } = entry.locator;
+      return {
+        ...entry,
+        locator: file === sourceFile ? locator : entry.locator,
+      };
+    };
+    return {
+      sessionId: group.sessionId,
+      harnessId: group.harnessId,
+      ...(group.archiveState === "archived" ? { archiveState: group.archiveState } : {}),
+      sourceFile,
+      matches: matches.map((match, index) => {
+        const contextSeqs = groupContext?.perMatch.get(match.eventSeq);
+        return {
+          ...inheritSource(match),
+          ...memberSeqsJson(match.eventSeq, group.matches[index]!.runLastSeq),
+          ...(contextSeqs !== undefined ? { contextSeqs } : {}),
+        };
+      }),
+      ...(groupContext !== undefined
+        ? { context: groupContext.events.map((event) => inheritSource(contextEntryJson(event))) }
+        : {}),
+    };
+  });
+}
+
 /** A collapsed run states its members; a singleton says it with `eventSeq`. */
 function memberSeqsJson(firstSeq: number, lastSeq: number): object {
   return lastSeq > firstSeq ? { memberSeqs: seqRange(firstSeq, lastSeq) } : {};
@@ -361,7 +436,7 @@ function subagentEvidenceJson(evidence: SubagentEvidence): object {
  * instead of silently missing the match objects. `runLastSeq` is the one
  * field with no key of its own: it is what `memberSeqs` is derived from.
  */
-function textMatchJson(match: TextMatch): object {
+function textMatchJson(match: TextMatch) {
   const {
     eventSeq,
     runLastSeq: _runLastSeq,
@@ -388,7 +463,7 @@ function textMatchJson(match: TextMatch): object {
   };
 }
 
-function fileTouchMatchJson(match: FileTouchMatch): object {
+function fileTouchMatchJson(match: FileTouchMatch) {
   const {
     eventSeq,
     runLastSeq: _runLastSeq,
@@ -414,7 +489,7 @@ function fileTouchMatchJson(match: FileTouchMatch): object {
 }
 
 /** A `-C` context entry follows the same rule as the match it accompanies. */
-function contextEntryJson(event: ViewEvent): object {
+function contextEntryJson(event: ViewEvent) {
   const line = lineText(event);
   return {
     seq: event.seq,

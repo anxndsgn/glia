@@ -27,14 +27,15 @@ Glia captures complete coding-agent Sessions (Claude Code and Codex transcripts)
 ### Find evidence: `glia search`
 
 ```sh
-glia --json search "authentication failure"          # text query; terms match as substrings
-glia --json search auth --word                       # whole words only: skips authored/authorization
-glia --json search --file auth.ts                    # Sessions that touched a file
-glia --json search "retry" --filter toolcall --since 2026-07-01 -C 2
+glia --json search "authentication failure" --compact # text query; terms match as substrings
+glia --json search auth --word --compact               # whole words only: skips authored/authorization
+glia --json search --file auth.ts --compact            # Sessions that touched a file
+glia --json search "retry" --compact --filter toolcall --since 2026-07-01 -C 2
 ```
 
 Key options:
 
+- `--compact` (requires `--json`): prefer this for agent searches. It selects a smaller grouped representation when shared fields and overlapping context save output bytes; otherwise it returns the ordinary flat `matches`. Token savings depend on the tokenizer and query. Decode grouped output as described below before citing it.
 - `--word`: terms match only at word boundaries (ASCII letters, digits, `_`), so a short term stops hitting every identifier containing it; CJK terms keep substring matching. Reach for it whenever a plain query drowns in token-family noise.
 - `--filter <value>` (repeatable, values union): `user`, `agent`, `toolcall`, `toolcall:<name>`, `toolresult`, `message`, `lifecycle`, `system`, `unknown`, `subagent`.
 - `--file <path>`: matches a touched path exactly, or as whole trailing path segments (`auth.ts` matches `src/lib/auth.ts`).
@@ -42,6 +43,8 @@ Key options:
 - `-C, --context <n>`: neighboring events around each match; `--per-session <n>` and `--limit <n>` widen result windows; `--sort relevance|time`; `--include-archived` adds Archived Sessions.
 
 Each JSON match carries `sessionId`, `eventSeq`, and a `locator` (`{sourceFile, sourceCursor}`) pointing into the Session's captured source bundle — cite it when quoting evidence. Text-query results (`"mode": "text"`) add an `excerpt`; `--file`-only results (`"mode": "file_touches"`) carry the touch's `operation` and `sourcePath` instead. Matches can come from subagent transcripts inside a parent Session; those carry `subagentId` (and `subagentType` when the source named the agent), and `--filter subagent` slices to exactly that evidence.
+
+With `--compact`, check `result.layout`. When it is `"grouped"`, read `result.groups` instead of `result.matches`: each group supplies `sessionId`, `harnessId`, and optional `archiveState` to its `matches`. Each match's `locator` inherits `sourceFile` from the group unless it states its own override (for example a subagent transcript); `sourceCursor` and `sourceEventId` stay on the locator. A match's `contextSeqs` selects its neighboring events from that group's shared `context` array by `seq`, in the stated order. Context locators inherit `sourceFile` in the same way. All remaining fields and their absence defaults are identical to flat output. This representation preserves every match, timestamp, excerpt, provenance field, and citation; use the inherited Session ID and event sequence with `view --seq` for full evidence.
 
 ### Read a Session: `glia list`, `glia show`, `glia view`
 
