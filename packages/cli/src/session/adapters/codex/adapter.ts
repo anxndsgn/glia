@@ -60,37 +60,21 @@ export const codexAdapter: SessionHarnessAdapter = {
     const sessionsDir = join(codexHome(context.env), "sessions");
     if (!(await directoryExists(sessionsDir))) return;
     for (const transcriptPath of await collectJsonlFiles(sessionsDir)) {
-      const lines = await readJsonlLines(transcriptPath);
-      const meta = lines.find((l) => l.value?.["type"] === "session_meta")?.value;
-      const payload = meta ? asObject(meta["payload"]) : null;
-      const sessionId =
-        (payload ? asString(payload["id"]) : null) ?? sessionIdFromFileName(transcriptPath);
-      if (!sessionId) continue;
-      const resumedFrom = payload ? asString(payload["resumed_from"]) : null;
-      const identity = { harnessId: "codex" as const, sourceSessionId: sessionId };
-      // Codex rollouts record no session title; the earliest user message
-      // is the only source-provided Label the format offers.
-      const firstUserText = isSubagentSession(payload)
-        ? null
-        : (sourceAuthoredUserMessages(lines)[0]?.text ?? firstLegacyUserMessage(lines));
-      yield {
-        identity,
-        candidateId: candidateIdOf(identity),
-        subagent: subagentOrigin(payload),
-        openingPath: payload ? asString(payload["cwd"]) : null,
-        sourceFiles: [
-          {
-            absolutePath: transcriptPath,
-            bundlePath: TRANSCRIPT_BUNDLE_PATH,
-            mediaType: "application/jsonl",
-          },
-        ],
-        continuation: resumedFrom ? { parentSessionId: resumedFrom } : null,
-        sessionTime:
-          (meta ? asString(meta["timestamp"]) : null) ??
-          (payload ? asString(payload["timestamp"]) : null),
-        label: sessionLabel(firstUserText),
-      };
+      const candidate = await candidateFromTranscript(transcriptPath);
+      if (candidate !== null) yield candidate;
+    }
+  },
+
+  async refreshCandidate(candidate: SessionCandidate): Promise<SessionCandidate | null> {
+    const transcript = candidate.sourceFiles.find(
+      (file) => file.bundlePath === TRANSCRIPT_BUNDLE_PATH,
+    );
+    if (transcript === undefined) return null;
+    try {
+      return await candidateFromTranscript(transcript.absolutePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
     }
   },
 
@@ -144,6 +128,41 @@ export const codexAdapter: SessionHarnessAdapter = {
     }
   },
 };
+
+/** Re-reads one rollout, including its current source-provided identity. */
+async function candidateFromTranscript(transcriptPath: string): Promise<SessionCandidate | null> {
+  const lines = await readJsonlLines(transcriptPath);
+  const meta = lines.find((l) => l.value?.["type"] === "session_meta")?.value;
+  const payload = meta ? asObject(meta["payload"]) : null;
+  const sessionId =
+    (payload ? asString(payload["id"]) : null) ?? sessionIdFromFileName(transcriptPath);
+  if (!sessionId) return null;
+  const resumedFrom = payload ? asString(payload["resumed_from"]) : null;
+  const identity = { harnessId: "codex" as const, sourceSessionId: sessionId };
+  // Codex rollouts record no session title; the earliest user message
+  // is the only source-provided Label the format offers.
+  const firstUserText = isSubagentSession(payload)
+    ? null
+    : (sourceAuthoredUserMessages(lines)[0]?.text ?? firstLegacyUserMessage(lines));
+  return {
+    identity,
+    candidateId: candidateIdOf(identity),
+    subagent: subagentOrigin(payload),
+    openingPath: payload ? asString(payload["cwd"]) : null,
+    sourceFiles: [
+      {
+        absolutePath: transcriptPath,
+        bundlePath: TRANSCRIPT_BUNDLE_PATH,
+        mediaType: "application/jsonl",
+      },
+    ],
+    continuation: resumedFrom ? { parentSessionId: resumedFrom } : null,
+    sessionTime:
+      (meta ? asString(meta["timestamp"]) : null) ??
+      (payload ? asString(payload["timestamp"]) : null),
+    label: sessionLabel(firstUserText),
+  };
+}
 
 /**
  * Codex opens a rollout by writing its own preamble — the environment

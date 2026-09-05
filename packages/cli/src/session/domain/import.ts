@@ -1136,6 +1136,11 @@ async function rediscoverCandidate(
   env: Record<string, string | undefined>,
 ): Promise<SessionCandidate | null> {
   const adapter = adapterFor(candidate.identity.harnessId);
+  // The known transcript is the normal case. Re-read its metadata and complete
+  // allowlist on every check without parsing unrelated Sessions. A source that
+  // moved or changed identity still needs full discovery to find its new path.
+  const refreshed = await adapter.refreshCandidate(candidate);
+  if (refreshed?.candidateId === candidate.candidateId) return refreshed;
   for await (const live of adapter.discover({ env })) {
     if (live.candidateId === candidate.candidateId) return live;
   }

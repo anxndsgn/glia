@@ -184,7 +184,7 @@ export function wrapLines(text: string, width: number, lines: number): string[] 
   if (width <= 0 || lines <= 0 || words.length === 0) return [];
   const out: string[] = [];
   let row = "";
-  for (const word of words) {
+  for (const [index, word] of words.entries()) {
     const candidate = row === "" ? word : `${row} ${word}`;
     if (candidate.length <= width) {
       row = candidate;
@@ -193,7 +193,7 @@ export function wrapLines(text: string, width: number, lines: number): string[] 
     if (row !== "") out.push(row);
     if (out.length === lines - 1) {
       // The last row absorbs the remainder, clipped.
-      const rest = words.slice(words.indexOf(word)).join(" ");
+      const rest = words.slice(index).join(" ");
       out.push(truncate(rest, width));
       return out;
     }

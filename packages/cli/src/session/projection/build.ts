@@ -49,7 +49,7 @@ export async function buildProjection(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const closeRun = db.prepare(
-      "UPDATE events SET run_last_seq = ? WHERE session_id = ? AND run_first_seq = ?",
+      "UPDATE events SET run_last_seq = ? WHERE session_id = ? AND seq BETWEEN ? AND ?",
     );
     const insertFts = db.prepare("INSERT INTO events_fts (rowid, text) VALUES (?, ?)");
     const insertToolName = db.prepare(
@@ -88,6 +88,13 @@ export async function buildProjection(
       // and byte-identical normalized text. Adjacency is a fact of the
       // Session, fixed here at build — never of a filtered view.
       let runFirstSeq = 0;
+      // Close each run once using the Session/sequence index. Updating all
+      // preceding members on every duplicate would make long runs quadratic.
+      const finishRun = (lastSeq: number): void => {
+        if (lastSeq > runFirstSeq) {
+          closeRun.run(lastSeq, sessionId, runFirstSeq, lastSeq);
+        }
+      };
       let prevRun: { kind: string; role: string | null; text: string | null } | null = null;
       const labelCandidates = new Map<SessionLabelSource, { text: string; seq: number }>();
       for await (const event of adapter.project(bundle)) {
@@ -99,9 +106,8 @@ export async function buildProjection(
           event.text !== null &&
           prevRun.text === event.text &&
           (event.kind !== "message" || prevRun.role === event.role);
-        if (continuesRun) {
-          closeRun.run(seq, sessionId, runFirstSeq);
-        } else {
+        if (!continuesRun) {
+          finishRun(seq - 1);
           runFirstSeq = seq;
         }
         prevRun = { kind: event.kind, role: event.role, text: event.text };
@@ -144,6 +150,7 @@ export async function buildProjection(
           }
         }
       }
+      finishRun(seq);
       const label = selectLabel(labelCandidates);
       insertSession.run(
         sessionId,
