@@ -118,6 +118,13 @@ a single-member sequence range) is omitted, and those verbs carry no per-item
 Session header are unchanged, and `show` remains the full-fidelity surface
 that emits every field.
 
+Use `glia --json search "retry" --compact -C 2` to reduce repeated metadata
+and overlapping context. When grouping saves bytes, `result.layout: "grouped"`
+selects Session groups with inherited identity and source files; otherwise
+the result keeps the flat layout. Both preserve the same evidence. See the
+[agent decoding contract](packages/cli/assets/SKILL.md#find-evidence-glia-search)
+and [measured comparison with the previous Glia, ctx, and Obelisk](benchmarks/search-tokens/README.md).
+
 Machine setup commands are `setup`, `setup remove`, `hook install|remove`, and
 `skill install|remove`. Store commands are `sync`, `status`, and
 `store remote set|show`. Project Binding commands are `project list`, `project
