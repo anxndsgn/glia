@@ -177,109 +177,56 @@ describe("setup umbrella", () => {
     expect(skillResults(await runSetup(setupContext()))).toEqual(["up_to_date", "up_to_date"]);
   });
 
-  test("installs both present Harness hooks and both skill conventions idempotently", async () => {
+  test("installs both skill conventions without hooks, prompts, or enrollment", async () => {
     await mkdir(env.claudeHome, { recursive: true });
     await mkdir(env.codexHome, { recursive: true });
-
-    const first = await runSetup(setupContext());
-    expect(first.human).toContain("automation is inert until approved");
-    expect(first.human).toContain("Backlog import skipped");
-    expect(await Bun.file(join(env.claudeHome, "settings.json")).exists()).toBeTrue();
-    expect(await Bun.file(join(env.codexHome, "hooks.json")).exists()).toBeTrue();
-    expect(
-      await Bun.file(join(userHome, ".claude", "skills", "glia", "SKILL.md")).exists(),
-    ).toBeTrue();
-    expect(
-      await Bun.file(join(userHome, ".agents", "skills", "glia", "SKILL.md")).exists(),
-    ).toBeTrue();
-
-    const before = await Promise.all([
-      readFile(join(env.claudeHome, "settings.json"), "utf8"),
-      readFile(join(env.codexHome, "hooks.json"), "utf8"),
-      readFile(join(userHome, ".claude", "skills", "glia", "SKILL.md"), "utf8"),
-    ]);
-    const second = await runSetup(setupContext());
-    expect(second.human).toContain("up to date");
-    expect(
-      await Promise.all([
-        readFile(join(env.claudeHome, "settings.json"), "utf8"),
-        readFile(join(env.codexHome, "hooks.json"), "utf8"),
-        readFile(join(userHome, ".claude", "skills", "glia", "SKILL.md"), "utf8"),
-      ]),
-    ).toEqual(before);
-
-    const removed = await runSetupRemove(setupContext());
-    expect(removed.human).toContain("removed");
-    expect(await readFile(join(env.claudeHome, "settings.json"), "utf8")).not.toContain(
-      "import --hook",
+    await writeClaudeSession(env.claudeHome, { sessionId: "setup-local", cwd: env.worktree });
+    const phases: string[] = [];
+    const outcome = await runSetup(
+      setupContext({
+        inputDisabled: false,
+        progress: async (_ctx, message, _done, step) => {
+          phases.push(message);
+          return await step();
+        },
+      }),
     );
+    expect(outcome.human).toContain("Search local Sessions immediately");
+    expect(outcome.human).toContain("--auto-save on");
+    expect(phases).toEqual(["Installing Glia skill"]);
+    for (const path of [
+      join(env.claudeHome, "settings.json"),
+      join(env.codexHome, "hooks.json"),
+      join(env.home, "projects"),
+    ]) {
+      expect(await Bun.file(path).exists()).toBeFalse();
+    }
+    for (const convention of [".claude", ".agents"]) {
+      expect(
+        await Bun.file(join(userHome, convention, "skills", "glia", "SKILL.md")).exists(),
+      ).toBeTrue();
+    }
+    expect((await runSetup(setupContext())).human).toContain("up to date");
+  });
+
+  test("setup preserves existing hooks; explicit removal removes only managed integration", async () => {
+    await mkdir(env.codexHome, { recursive: true });
+    await installHookConfig("codex", env.env, "/opt/glia/bin/glia");
+    const path = join(env.codexHome, "hooks.json");
+    const before = await readFile(path, "utf8");
+    await runSetup(setupContext());
+    expect(await readFile(path, "utf8")).toBe(before);
+    await runSetupRemove(setupContext());
+    expect(await readFile(path, "utf8")).not.toContain("import --hook");
     expect(
       await Bun.file(join(userHome, ".agents", "skills", "glia", "SKILL.md")).exists(),
     ).toBeFalse();
   });
 
-  test("absent Harnesses are skipped without creating their hook homes", async () => {
-    const outcome = await runSetup(setupContext());
-    const rows = (outcome.json as { hooks: { results: { status: string }[] } }).hooks.results;
-    expect(rows.map((row) => row.status)).toEqual(["skipped_absent", "skipped_absent"]);
+  test("setup works outside Git without creating a Glia Project", async () => {
+    await runSetup(setupContext({ cwd: env.root }));
+    expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();
     expect(await Bun.file(join(env.codexHome, "hooks.json")).exists()).toBeFalse();
     expect(await Bun.file(join(env.claudeHome, "settings.json")).exists()).toBeFalse();
-  });
-
-  test("interactive consent imports the current repository backlog and creates its Binding", async () => {
-    await mkdir(env.claudeHome, { recursive: true });
-    await writeClaudeSession(env.claudeHome, { sessionId: "setup-backlog", cwd: env.worktree });
-    const phases: { message: string; done: string }[] = [];
-    const outcome = await runSetup(
-      setupContext({
-        inputDisabled: false,
-        confirmImport: async () => true,
-        progress: async (_ctx, message, done, step) => {
-          const result = await step();
-          phases.push({ message, done: done(result) });
-          return result;
-        },
-      }),
-    );
-    const backlog = (outcome.json as { backlog: { imported: { accepted: unknown[] } } }).backlog;
-    expect(backlog.imported.accepted).toHaveLength(1);
-    const projects = await readdir(join(env.home, "projects"));
-    expect(projects).toHaveLength(1);
-    expect(await listSessionIds(projectPaths(env.home, projects[0]!).storeDir)).toHaveLength(1);
-    expect(phases).toEqual([
-      { message: "Installing SessionEnd hooks", done: "SessionEnd hooks configured" },
-      { message: "Installing Glia skill", done: "Glia skill configured" },
-      {
-        message: "Importing existing Session backlog",
-        done: "Backlog import complete: 1 accepted, 0 unchanged",
-      },
-    ]);
-  });
-
-  test("declining the single backlog question keeps hooks installed and the repository unenrolled", async () => {
-    await mkdir(env.claudeHome, { recursive: true });
-    await writeClaudeSession(env.claudeHome, {
-      sessionId: "setup-declined",
-      cwd: env.worktree,
-    });
-    let prompts = 0;
-    let promptText = "";
-    const outcome = await runSetup(
-      setupContext({
-        inputDisabled: false,
-        confirmImport: async (message) => {
-          prompts += 1;
-          promptText = message;
-          return false;
-        },
-      }),
-    );
-
-    expect(prompts).toBe(1);
-    expect(promptText).toContain("Enroll repository");
-    expect(promptText).toContain("SessionEnd: capture future Sessions automatically");
-    expect(outcome.human).toContain("Backlog import skipped");
-    expect(await Bun.file(join(env.claudeHome, "settings.json")).exists()).toBeTrue();
-    expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();
   });
 });

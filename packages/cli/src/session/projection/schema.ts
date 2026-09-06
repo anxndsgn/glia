@@ -4,7 +4,7 @@ import type { Database } from "bun:sqlite";
  * Bump whenever adapter normalization or the projection schema changes,
  * so published projections rebuild even for an unchanged Store commit.
  */
-export const PROJECTION_VERSION = 2;
+export const PROJECTION_VERSION = 3;
 /** In-process sentinel for a schema-correct empty projection with no backing file. */
 export const EMPTY_PROJECTION_PATH = ":glia-empty-projection:";
 
@@ -27,7 +27,7 @@ export function createProjectionSchema(db: Database): void {
       association_mode TEXT NOT NULL,
       continuation_parent TEXT,
       revision_digest TEXT NOT NULL,
-      accepted_at TEXT NOT NULL,
+      accepted_at TEXT,
       archive_state TEXT NOT NULL,
       event_count INTEGER NOT NULL DEFAULT 0,
       first_timestamp TEXT,

@@ -1,3 +1,6 @@
+import { autoSaveEnabled, setAutoSave } from "../../core/project/auto-save.ts";
+import { runHookInstall } from "../../core/commands/hook.ts";
+import { currentSelfCommand, hookExecutablePath } from "./hook-import.ts";
 import { PROJECTION_DEFERRED_NOTE } from "../../core/session-module.ts";
 import type { CommandDefinition, CommandRunContext } from "../../core/session-module.ts";
 import type { CommandOutcome } from "../../core/output/result.ts";
@@ -17,8 +20,6 @@ import { familyHintText } from "./family-display.ts";
 import type { SecretHit, UnscannedFile } from "../domain/secret-detection.ts";
 import { renderSuspectedHits } from "./render-secret-hits.ts";
 import { ageDays } from "../domain/advisories.ts";
-import { HARNESS_IDS } from "../../core/harnesses/ids.ts";
-import { managedHookInstalled } from "../../core/hooks/config.ts";
 
 export function parseHarnessOption(value: unknown): HarnessId | null {
   if (value === undefined) return null;
@@ -36,9 +37,6 @@ export async function confirmFirstImport(
 ): Promise<void> {
   const harness = parseHarnessOption(options["harness"]);
   const preview = await previewEnrollment(ctx.project, ctx.env, harness);
-  const hooksInstalled = (
-    await Promise.all(HARNESS_IDS.map((id) => managedHookInstalled(id, ctx.env).catch(() => false)))
-  ).some(Boolean);
   const lines = [
     `Enroll repository ${ctx.project.worktree} with Glia?`,
     "",
@@ -49,7 +47,7 @@ export async function confirmFirstImport(
   if (preview.pending > 0) {
     lines.push(`  Association: ${preview.pending} Candidate(s) need a Project decision first`);
   }
-  if (hooksInstalled) {
+  if (options["autoSave"] === "on") {
     lines.push("  SessionEnd: capture future Sessions automatically for this repository");
   }
   if (preview.sourceErrors.length > 0) {
@@ -73,15 +71,21 @@ export async function confirmFirstImport(
 
 export const importCommand: CommandDefinition = {
   name: "import",
-  projectAccess: (options) => (options["dryRun"] === true ? "read" : "write"),
+  projectAccess: (options) =>
+    options["dryRun"] === true || options["autoSave"] === "off" ? "read" : "write",
   unenrolledRead: "empty",
   description:
     "discover Sessions, accept associated Candidates into the Store, and refresh the projection; " +
     "on a terminal, pending and flagged Candidates are resolved with prompts (skip with --no-input)",
   options: [
     {
+      flags: "--auto-save <mode>",
+      description:
+        "on: import now and enable future automatic saving; off: disable automatic saving without importing",
+    },
+    {
       flags: "--hook",
-      description: "run the silent SessionEnd automation path (installed by glia setup)",
+      description: "run the silent SessionEnd automation path (installed by --auto-save on)",
     },
     { flags: "--harness <id>", description: "only inspect one harness (codex or claude-code)" },
     {
@@ -94,6 +98,24 @@ export const importCommand: CommandDefinition = {
     // the flag and routes through the machine-local hook invocation instead.
     const harness = parseHarnessOption(options["harness"]);
     const dryRun = options["dryRun"] === true;
+    const autoSave = options["autoSave"];
+    if (autoSave !== undefined && autoSave !== "on" && autoSave !== "off") {
+      throw new GliaError("USAGE", "--auto-save must be on or off");
+    }
+    if (autoSave !== undefined && (dryRun || harness !== null)) {
+      throw new GliaError(
+        "USAGE",
+        "--auto-save applies to the whole Project and cannot combine with --dry-run or --harness",
+      );
+    }
+    if (autoSave === "off") {
+      if (ctx.project.enrollment.kind === "enrolled") await setAutoSave(ctx.project, false);
+      return {
+        json: { autoSave: false },
+        human:
+          "Automatic saving disabled for this Project on this machine. Saved Sessions are retained.",
+      };
+    }
     // Interactive resolution follows the terminal: --json, --no-input, and
     // piped stdio all disable it, so scripted imports never block on a prompt.
     const interactive = !ctx.inputDisabled && !dryRun;
@@ -117,7 +139,25 @@ export const importCommand: CommandDefinition = {
     if (interactive && report.flagged.length > 0) {
       await resolveFlaggedInteractively(ctx, report);
     }
-    return { json: report, human: humanImportReport(report) };
+    let automationNote = "";
+    let hooks: CommandOutcome | null = null;
+    if (autoSave === "on") {
+      hooks = await runHookInstall({
+        env: ctx.env,
+        executablePath: hookExecutablePath(),
+        selfCommand: currentSelfCommand(),
+      });
+      await setAutoSave(ctx.project, true);
+      automationNote = `\n${hooks.human}\nAutomatic saving enabled for this Project on this machine. Approve the SessionEnd hook in each Harness when prompted.`;
+    }
+    return {
+      json: {
+        ...report,
+        autoSave: await autoSaveEnabled(ctx.project),
+        ...(hooks === null ? {} : { hooks: hooks.json }),
+      },
+      human: humanImportReport(report) + automationNote,
+    };
   },
 };
 

@@ -1,3 +1,4 @@
+import { autoSaveEnabled } from "../project/auto-save.ts";
 import { buildInfo } from "../build-info.ts";
 import { projectIsEnrolled, type SessionModule, type LoadedProject } from "../session-module.ts";
 import type { CommandOutcome } from "../output/result.ts";
@@ -14,6 +15,7 @@ export async function runStatus(
   env: Record<string, string | undefined>,
 ): Promise<CommandOutcome> {
   const enrolled = projectIsEnrolled(project);
+  const autoSave = await autoSaveEnabled(project);
   const bindings = await readBindings(project.paths.bindingsFile);
   const remote = project.declaration.store.remote ?? null;
   const syncState = await readSyncState(project.paths.syncStateFile);
@@ -44,6 +46,7 @@ export async function runStatus(
       ? `  store: ${remote ? `remote ${remote}` : "local_only (no clean-machine recovery until a remote is configured)"}`
       : `  store declaration: ${remote ?? "none"}`,
     `  enrollment: ${enrolled ? "enrolled" : "not enrolled (run `glia import`)"}`,
+    `  automatic saving: ${autoSave ? "on" : "off"} (this machine)`,
     `  hooks installed: ${HARNESS_IDS.map((id) => `${id}=${hookInstallation[id] ? "yes" : "no"}`).join(" ")}`,
   ];
   if (remote) {
@@ -77,6 +80,7 @@ export async function runStatus(
       worktree: project.worktree,
       build,
       hookInstallation,
+      autoSave,
       store: {
         mode: remote ? "remote" : "local_only",
         remote,

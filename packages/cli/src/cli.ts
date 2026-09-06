@@ -162,8 +162,15 @@ for (const definition of sessionModule.commands) {
     const options = invocation[invocation.length - 2] as Record<string, unknown>;
     if (definition.name === "import" && options["hook"] === true) {
       await execute(definition.name, async (flags) => {
-        if (options["harness"] !== undefined || options["dryRun"] === true) {
-          throw new GliaError("USAGE", "--hook cannot be combined with --harness or --dry-run");
+        if (
+          options["harness"] !== undefined ||
+          options["dryRun"] === true ||
+          options["autoSave"] !== undefined
+        ) {
+          throw new GliaError(
+            "USAGE",
+            "--hook cannot be combined with --harness, --dry-run, or --auto-save",
+          );
         }
         await runHookInvocation({
           cwd: process.cwd(),
@@ -175,6 +182,18 @@ for (const definition of sessionModule.commands) {
       return;
     }
     await execute(definition.name, async (flags) => {
+      if (definition.name === "import" && options["autoSave"] !== undefined) {
+        if (
+          !["on", "off"].includes(String(options["autoSave"])) ||
+          options["dryRun"] === true ||
+          options["harness"] !== undefined
+        ) {
+          throw new GliaError(
+            "USAGE",
+            "--auto-save accepts on or off and cannot combine with --dry-run or --harness",
+          );
+        }
+      }
       const access =
         typeof definition.projectAccess === "function"
           ? definition.projectAccess(options)
@@ -193,6 +212,12 @@ for (const definition of sessionModule.commands) {
       }
       if (ctx.project.enrollment.kind === "unenrolled" && definition.unenrolledRead === "error") {
         throw notEnrolledError(ctx.project);
+      }
+      if (
+        ["search", "list", "view", "show"].includes(definition.name) &&
+        options["saved"] !== true
+      ) {
+        return await definition.run(ctx, args, options);
       }
       const outcome = await runWithSessionAdvisory(
         ctx,
@@ -355,7 +380,7 @@ hook
 
 const setup = program
   .command("setup")
-  .description("install the bundled skill and SessionEnd automation for this machine")
+  .description("install the bundled skill for immediate local Session search")
   .action(async () => {
     await execute("setup", (flags) =>
       runWithOptionalSessionAdvisory(flags, () =>

@@ -216,12 +216,41 @@ describe("compiled CLI contract", () => {
     expect(detail["revisionDigest"]).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  test("automatic saving is an explicit Project setting through argv", async () => {
+    await writeClaudeSession(env.claudeHome, { sessionId: "auto-argv", cwd: env.worktree });
+    const once = await glia(["--json", "import"]);
+    expect(once.exitCode).toBe(0);
+    expect(JSON.parse(once.stdout).result.autoSave).toBe(false);
+    const enabled = await glia(["--json", "import", "--auto-save", "on"]);
+    expect(enabled.exitCode).toBe(0);
+    expect(enabled.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(enabled.stdout).result.autoSave).toBe(true);
+    const disabled = await glia(["--json", "import", "--auto-save", "off"]);
+    expect(disabled.exitCode).toBe(0);
+    expect(JSON.parse(disabled.stdout).result.autoSave).toBe(false);
+    const status = await glia(["--json", "status"]);
+    expect(JSON.parse(status.stdout).result.autoSave).toBe(false);
+  });
+
+  test("invalid automatic-saving options fail before realizing a Project", async () => {
+    for (const flags of [
+      ["--auto-save", "maybe"],
+      ["--auto-save", "on", "--dry-run"],
+      ["--auto-save", "off", "--harness", "codex"],
+    ]) {
+      const result = await glia(["--json", "import", ...flags]);
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.stdout).error.code).toBe("USAGE");
+      expect(await Bun.file(join(env.home, "projects")).exists()).toBe(false);
+    }
+  });
+
   test("JSON errors use the same single-document stdout contract with non-zero exit", async () => {
     const run = await glia(["--json", "show", "ses_00000000000000000000000000000000"]);
     expect(run.exitCode).not.toBe(0);
     const doc = JSON.parse(run.stdout) as { ok: boolean; error: { code: string } };
     expect(doc.ok).toBeFalse();
-    expect(doc.error.code).toBe("NOT_ENROLLED");
+    expect(doc.error.code).toBe("NOT_FOUND");
   });
 
   test("search --compact selects grouped JSON and rejects human mode", async () => {
@@ -381,7 +410,7 @@ describe("compiled CLI contract", () => {
     expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();
   });
 
-  test("unenrolled reads stay side-effect free and expose one typed enrollment contract", async () => {
+  test("native reads work without enrollment while Store previews retain their enrollment contract", async () => {
     await writeClaudeSession(env.claudeHome, {
       sessionId: "unenrolled-preview",
       cwd: env.worktree,
@@ -389,8 +418,6 @@ describe("compiled CLI contract", () => {
     });
 
     for (const args of [
-      ["--json", "list"],
-      ["--json", "search", "UNENROLLEDPROBE"],
       ["--json", "conflicts"],
       ["--json", "tombstones"],
       ["--json", "candidates", "--all"],
@@ -418,7 +445,10 @@ describe("compiled CLI contract", () => {
 
     const humanSearch = await glia(["search", "UNENROLLEDPROBE"]);
     expect(humanSearch.exitCode).toBe(0);
-    expect(humanSearch.stdout).toContain("not enrolled with Glia");
+    expect(humanSearch.stdout).toContain("UNENROLLEDPROBE");
+    expect(humanSearch.stdout).toContain("not saved");
+    const localList = await glia(["--json", "list"]);
+    expect(JSON.parse(localList.stdout).result.totalSessions).toBe(1);
     expect(humanSearch.stdout).not.toContain("are importable");
 
     for (const args of [
@@ -437,8 +467,8 @@ describe("compiled CLI contract", () => {
       const doc = JSON.parse(run.stdout) as {
         error: { code: string; nextSteps: string[] };
       };
-      expect(doc.error.code).toBe("NOT_ENROLLED");
-      expect(doc.error.nextSteps).toEqual(["glia import"]);
+      expect(doc.error.code).toBe(args[1] === "export" ? "NOT_ENROLLED" : "NOT_FOUND");
+      if (args[1] === "export") expect(doc.error.nextSteps).toEqual(["glia import"]);
       expect(run.stdout).not.toContain("__glia_unenrolled_read__");
     }
     expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();

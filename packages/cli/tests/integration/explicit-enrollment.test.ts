@@ -62,11 +62,11 @@ describe("explicit Project enrollment", () => {
     await writeDeclaration(env.worktree, declaration);
     await loadProject(env.worktree, env.home, { allowMissingStore: true });
 
-    await expect(loadProjectForRead(env.worktree, env.home)).rejects.toMatchObject({
-      code: "STORE_NOT_REALIZED",
-      details: { projectId: "prj_remote_only" },
-      nextSteps: ["glia sync"],
-    });
+    const read = await loadProjectForRead(env.worktree, env.home);
+    expect(read.enrollment.kind).toBe("enrolled");
+    await writeClaudeSession(env.claudeHome, { sessionId: "remote-local", cwd: env.worktree });
+    const result = await listCommand.run(context(read), [], {});
+    expect(result.json).toMatchObject({ totalSessions: 1, projection: { partial: true } });
   });
 
   test("a committed declaration stays unenrolled locally and is adopted on enrollment", async () => {
@@ -118,6 +118,11 @@ describe("explicit Project enrollment", () => {
     expect(prompt).toContain("Sessions: import 0 Session(s) now from 2 discovered Candidate(s)");
     expect(prompt).toContain("Secret review: withhold 1 Candidate(s)");
     expect(prompt).toContain("Association: 1 Candidate(s) need a Project decision first");
+    expect(prompt).not.toContain("SessionEnd: capture future Sessions automatically");
+    await confirmFirstImport(context(project), { autoSave: "on" }, async (message) => {
+      prompt = message;
+      return true;
+    });
     expect(prompt).toContain("SessionEnd: capture future Sessions automatically");
     expect(await Bun.file(join(env.home, "projects")).exists()).toBeFalse();
   });

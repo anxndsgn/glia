@@ -1,3 +1,4 @@
+import { setAutoSave } from "../../src/core/project/auto-save.ts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -47,6 +48,7 @@ let project: LoadedProject;
 beforeEach(async () => {
   env = await makeTestEnv();
   project = await initProject(env);
+  await setAutoSave(project, true);
 });
 
 afterEach(async () => {
@@ -990,13 +992,13 @@ describe("withheld freshness state", () => {
   });
 });
 
-describe("zero-result freshness advisories", () => {
+describe("saved-only zero-result freshness advisories", () => {
   test("discovers importable and pending Candidates only when a search has no results", async () => {
     await writeClaudeSession(env.claudeHome, { sessionId: "not-imported", cwd: env.worktree });
     const outcome = await searchCommand.run(
       { project, env: env.env, jsonMode: true, inputDisabled: true },
       ["definitely absent"],
-      {},
+      { saved: true },
     );
     const json = outcome.json as {
       totalMatches: number;
@@ -1034,7 +1036,7 @@ describe("zero-result freshness advisories", () => {
     const outcome = await searchCommand.run(
       { project, env: env.env, jsonMode: true, inputDisabled: true },
       ["no match"],
-      {},
+      { saved: true },
     );
     const withheld = (
       outcome.json as {

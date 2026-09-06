@@ -1,3 +1,4 @@
+import { locallyForgotten } from "./local-state.ts";
 import { BindingIndex } from "../../core/project/bindings.ts";
 import type { LoadedProject } from "../../core/session-module.ts";
 import type { HarnessId } from "../../core/harnesses/ids.ts";
@@ -17,11 +18,6 @@ export interface DiscoveryResult {
   adapterFailures: AdapterFailure[];
 }
 
-const synthesizedDiscoveryCache = new WeakMap<
-  LoadedProject,
-  Map<string, Promise<DiscoveryResult>>
->();
-
 /**
  * Read-only discovery across every eligible Harness. An unavailable or
  * empty Harness never fails the run; adapter failures are isolated and
@@ -32,20 +28,7 @@ export function discoverCandidates(
   env: Record<string, string | undefined>,
   harnessFilter: HarnessId | null,
 ): Promise<DiscoveryResult> {
-  if (project.enrollment.kind === "enrolled") {
-    return discoverCandidatesUncached(project, env, harnessFilter);
-  }
-  let byHarness = synthesizedDiscoveryCache.get(project);
-  if (byHarness === undefined) {
-    byHarness = new Map();
-    synthesizedDiscoveryCache.set(project, byHarness);
-  }
-  const key = harnessFilter ?? "*";
-  const cached = byHarness.get(key);
-  if (cached !== undefined) return cached;
-  const discovery = discoverCandidatesUncached(project, env, harnessFilter);
-  byHarness.set(key, discovery);
-  return discovery;
+  return discoverCandidatesUncached(project, env, harnessFilter);
 }
 
 async function discoverCandidatesUncached(
@@ -53,6 +36,7 @@ async function discoverCandidatesUncached(
   env: Record<string, string | undefined>,
   harnessFilter: HarnessId | null,
 ): Promise<DiscoveryResult> {
+  const forgotten = await locallyForgotten(project.home);
   const state = await readDiscoveryState(project.paths.discoveryFile);
   // One Binding scan for the whole run: classification is per candidate,
   // but the Bindings it reads are the same for every one of them.
@@ -77,7 +61,9 @@ async function discoverCandidatesUncached(
       for await (const candidate of adapter.discover({ env })) {
         if (seen.has(candidate.candidateId)) continue;
         seen.add(candidate.candidateId);
-        const classification = await classifyCandidate(project, state, candidate, bindings);
+        const classification = forgotten.has(candidate.candidateId)
+          ? { kind: "ignored" as const }
+          : await classifyCandidate(project, state, candidate, bindings);
         result.candidates.push({ candidate, classification });
       }
     } catch (err) {

@@ -1,3 +1,4 @@
+import { purgeReadCache } from "./local-state.ts";
 import { dirname, join } from "node:path";
 import { mkdir, readdir } from "node:fs/promises";
 import type { LoadedProject, StoreDeletionEvent } from "../../core/session-module.ts";
@@ -196,6 +197,7 @@ export async function collapseLocalState(
     }
   }
   if (changed) await writeDiscoveryState(project.paths.discoveryFile, state);
+  await purgeReadCache(project.home);
 }
 
 /** Reads the Deletion Ledger from the Store working tree (local head). */

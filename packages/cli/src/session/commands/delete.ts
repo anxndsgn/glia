@@ -1,3 +1,8 @@
+import { loadProject } from "../../core/project/load.ts";
+import { discoverCandidates } from "../domain/discover.ts";
+import { forgetLocalSession, locallyForgotten } from "../domain/local-state.ts";
+import { readSessionMeta } from "../storage/store-layout.ts";
+import { isSessionConflicted } from "../domain/conflict.ts";
 import { PROJECTION_DEFERRED_NOTE } from "../../core/session-module.ts";
 import type { CommandDefinition } from "../../core/session-module.ts";
 import type { CommandOutcome } from "../../core/output/result.ts";
@@ -8,9 +13,9 @@ import { planDelete, runDelete, type DeletePlan } from "../domain/delete.ts";
 
 export const deleteCommand: CommandDefinition = {
   name: "delete",
-  projectAccess: "write",
+  projectAccess: "read",
   description:
-    "truly delete one Session: purge it from the Store and its Git history, leave a payload-free tombstone",
+    "forget a local or saved Session; retain Harness files and purge saved evidence with a tombstone",
   arguments: [{ name: "session-id", description: "the Session ID to delete" }],
   options: [{ flags: "--yes", description: "accept the deletion without prompting" }],
   async run(ctx, args, options): Promise<CommandOutcome> {
@@ -20,6 +25,42 @@ export const deleteCommand: CommandDefinition = {
 
     // The preview is read-only; INPUT_REQUIRED and the interactive
     // confirmation are both reported before any Store mutation.
+    const stored = await readSessionMeta(ctx.project.paths.storeDir, sessionId);
+    const conflicted = await isSessionConflicted(ctx.project.paths.storeDir, sessionId);
+    if (stored === null && !conflicted) {
+      if ((await locallyForgotten(ctx.project.home)).has(sessionId)) {
+        throw new GliaError("SESSION_DELETED", `Session ${sessionId} was forgotten`);
+      }
+      const discovery = await discoverCandidates(ctx.project, ctx.env, null);
+      const local = discovery.candidates.find(
+        (c) => c.candidate.candidateId === sessionId && c.classification.kind === "associated",
+      );
+      if (local !== undefined) {
+        if (!yes) {
+          if (ctx.jsonMode || ctx.inputDisabled)
+            throw new GliaError(
+              "INPUT_REQUIRED",
+              "forgetting a Session needs confirmation; re-run with --yes",
+              { sessionId },
+              [`glia delete ${sessionId} --yes`],
+            );
+          if (
+            !(await confirmProceed(
+              `Forget Session ${sessionId}? Glia will exclude it from search and automatic import. The Harness source file is retained.`,
+            ))
+          ) {
+            throw new GliaError("CANCELLED", "deletion cancelled; nothing was changed");
+          }
+        }
+        await forgetLocalSession(ctx.project.home, sessionId, ctx.project.worktree);
+        return {
+          json: { sessionId, forgotten: true, saved: false },
+          human: `Forgot local Session ${sessionId}. It is excluded from search and import; the Harness source file is retained.`,
+        };
+      }
+    }
+    if (ctx.project.enrollment.kind === "unenrolled")
+      throw new GliaError("NOT_FOUND", `Session ${sessionId} is not available in this Project`);
     const plan = await planDelete(ctx.project, sessionId);
 
     if (!yes) {
@@ -46,7 +87,15 @@ export const deleteCommand: CommandDefinition = {
       }
     }
 
-    const report = await runDelete(ctx.project, ctx.env, sessionId);
+    // Re-enter the write loader after consent so historical aliases cannot mutate a Store.
+    const writable = await loadProject(ctx.project.worktree, ctx.project.home);
+    if (writable.declaration.projectId !== ctx.project.declaration.projectId)
+      throw new GliaError(
+        "BINDING_CHANGED",
+        "Project ownership changed during deletion preview; retry",
+        { sessionId },
+      );
+    const report = await runDelete(writable, ctx.env, sessionId);
     const lines = [
       `Deleted session ${report.sessionId} (${report.harnessId} ${report.sourceSessionId}) at epoch ${report.epoch}.`,
       `Its contents were purged from the working tree and the complete Store history; a payload-free tombstone remains.`,

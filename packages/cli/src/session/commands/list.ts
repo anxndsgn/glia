@@ -1,8 +1,8 @@
 import type { CommandDefinition } from "../../core/session-module.ts";
 import type { CommandOutcome } from "../../core/output/result.ts";
 import { assertEveryFieldConsidered, positiveIntOrNull } from "./shared.ts";
-import { ensureProjection } from "../projection/publish.ts";
-import { listSessions, openProjection, type SessionRow } from "../projection/query.ts";
+import { queryProjection, readableProjectionJson, readableNotes } from "../projection/readable.ts";
+import { listSessions, type SessionRow } from "../projection/query.ts";
 import { listFamilyRows, visibleFamilyFacts, type FamilyFacts } from "../projection/family.ts";
 import { familyNote } from "./family-display.ts";
 import { subagentNote } from "./subagent-display.ts";
@@ -23,8 +23,9 @@ export const listCommand: CommandDefinition = {
   name: "list",
   projectAccess: "read",
   unenrolledRead: "empty",
-  description: "list accepted Sessions by latest event time, newest first",
+  description: "list local and saved Sessions by latest event time, newest first",
   options: [
+    { flags: "--saved", description: "read only saved Store evidence" },
     {
       flags: "--limit <n>",
       description: "maximum Sessions shown (unbounded by default; the true total is always stated)",
@@ -37,8 +38,8 @@ export const listCommand: CommandDefinition = {
   async run(ctx, _args, options): Promise<CommandOutcome> {
     const limit = positiveIntOrNull(options["limit"], "--limit");
     const includeArchived = options["includeArchived"] === true;
-    const handle = await ensureProjection(ctx.project, ctx.env);
-    const db = openProjection(handle.dbPath);
+    const handle = await queryProjection(ctx, options["saved"] === true);
+    const db = handle.db;
     try {
       const sessions = listSessions(db, includeArchived);
       // Family facts cover the visible set: the Sessions this listing
@@ -59,9 +60,17 @@ export const listCommand: CommandDefinition = {
             sessionEntryJson(session, families.get(session.sessionId) ?? null),
           ),
           parameters: { limit, includeArchived },
-          projection: { storeCommit: handle.storeCommit, stale: handle.stale },
+          projection: readableProjectionJson(
+            handle,
+            shown.map((s) => s.sessionId),
+          ),
         },
-        human: lines.join("\n"),
+        human:
+          lines.join("\n") +
+          readableNotes(
+            handle,
+            shown.map((s) => s.sessionId),
+          ),
       };
     } finally {
       db.close();
