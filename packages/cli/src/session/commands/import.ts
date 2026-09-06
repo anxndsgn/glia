@@ -9,13 +9,8 @@ import { confirmProceed } from "../../core/output/confirm.ts";
 import { withProgress } from "../../core/output/progress.ts";
 import { isHarnessId, type HarnessId } from "../../core/harnesses/ids.ts";
 import { previewEnrollment, runImport, type ImportReport } from "../domain/import.ts";
-import { discoverCandidates } from "../domain/discover.ts";
-import {
-  associateCandidate,
-  ignoreCandidate,
-  mutateDiscoveryState,
-} from "../domain/discovery-state.ts";
-import { previewCandidateFamilies, type FamilyHint } from "../domain/family-hint.ts";
+import { ignoreCandidate, mutateDiscoveryState } from "../domain/discovery-state.ts";
+import type { FamilyHint } from "../domain/family-hint.ts";
 import { familyHintText } from "./family-display.ts";
 import type { SecretHit, UnscannedFile } from "../domain/secret-detection.ts";
 import { renderSuspectedHits } from "./render-secret-hits.ts";
@@ -45,7 +40,9 @@ export async function confirmFirstImport(
     `  Secret review: withhold ${preview.withheld} Candidate(s) pending explicit acceptance`,
   ];
   if (preview.pending > 0) {
-    lines.push(`  Association: ${preview.pending} Candidate(s) need a Project decision first`);
+    lines.push(
+      `  Unassociated: skip ${preview.pending} Candidate(s) whose Project could not be determined`,
+    );
   }
   if (options["autoSave"] === "on") {
     lines.push("  SessionEnd: capture future Sessions automatically for this repository");
@@ -76,7 +73,7 @@ export const importCommand: CommandDefinition = {
   unenrolledRead: "empty",
   description:
     "discover Sessions, accept associated Candidates into the Store, and refresh the projection; " +
-    "on a terminal, pending and flagged Candidates are resolved with prompts (skip with --no-input)",
+    "leave unassociated Candidates pending; on a terminal, review flagged Candidates (skip with --no-input)",
   options: [
     {
       flags: "--auto-save <mode>",
@@ -130,12 +127,6 @@ export const importCommand: CommandDefinition = {
           : `Accepted ${r.accepted.length} revision(s)`,
       () => runImport(ctx.project, ctx.env, { harness, dryRun, onlyCandidateIds: null }),
     );
-    // Pending resolution runs first: a Candidate associated here is
-    // re-imported with the secret gate intact, so its flagged bytes join
-    // the flagged prompt below instead of being accepted silently.
-    if (interactive && report.pending.length > 0) {
-      await resolvePendingInteractively(ctx, harness, report);
-    }
     if (interactive && report.flagged.length > 0) {
       await resolveFlaggedInteractively(ctx, report);
     }
@@ -246,85 +237,6 @@ async function resolveFlaggedInteractively(
   report.flagged = report.flagged.filter((f) => !resolvedIds.has(String(f["candidateId"])));
 }
 
-/**
- * Presents each pending Candidate and asks associate, skip, or ignore.
- * Newly associated Candidates are accepted by a follow-up run that keeps
- * the secret-detection gate: their flagged bytes join `report.flagged`
- * for the flagged prompt instead of being accepted silently.
- */
-async function resolvePendingInteractively(
-  ctx: CommandRunContext,
-  harness: HarnessId | null,
-  report: ImportReport,
-): Promise<void> {
-  const { select, isCancel } = await import("@clack/prompts");
-  // The main run's report carries only serializable summaries, so this
-  // pass re-discovers to get the full Candidates the family-hint preview
-  // captures from; it runs only when pending Candidates exist.
-  const discovery = await discoverCandidates(ctx.project, ctx.env, harness);
-  const pending = discovery.candidates.filter((c) => c.classification.kind === "pending");
-  if (pending.length === 0) return;
-  const preview = await previewCandidateFamilies(
-    ctx.project,
-    pending.map((entry) => entry.candidate),
-  );
-  try {
-    const associateIds: string[] = [];
-    const ignoreIds: string[] = [];
-    const resolvedIds = new Set<string>();
-    for (const { candidate } of pending) {
-      const hint = preview.hints.get(candidate.candidateId);
-      const familyNote = hint === undefined ? "" : `${familyHintText(hint)}\n`;
-      const choice = await select({
-        message:
-          `${familyNote}Session ${candidate.identity.sourceSessionId} (${candidate.identity.harnessId}) has no resolvable opening path. ` +
-          "Associate it with this project?",
-        options: [
-          { value: "associate", label: "Associate with this project" },
-          { value: "skip", label: "Decide later (keep pending)" },
-          { value: "ignore", label: "Ignore on this machine" },
-        ],
-      });
-      if (isCancel(choice)) throw new GliaError("CANCELLED", "import cancelled");
-      if (choice === "associate") {
-        associateIds.push(candidate.candidateId);
-        resolvedIds.add(candidate.candidateId);
-      } else if (choice === "ignore") {
-        ignoreIds.push(candidate.candidateId);
-        resolvedIds.add(candidate.candidateId);
-      }
-    }
-    if (associateIds.length > 0 || ignoreIds.length > 0) {
-      const decidedAt = new Date().toISOString();
-      await mutateDiscoveryState(ctx.project, ctx.env, (state) => {
-        for (const candidateId of associateIds) {
-          associateCandidate(state, candidateId, ctx.project.declaration.projectId, decidedAt);
-        }
-        for (const candidateId of ignoreIds) ignoreCandidate(state, candidateId);
-        return true;
-      });
-    }
-    if (associateIds.length > 0) {
-      const second = await withProgress(
-        ctx,
-        `Accepting ${associateIds.length} associated candidate(s)`,
-        (r) => `Accepted ${r.accepted.length} revision(s)`,
-        () =>
-          runImport(ctx.project, ctx.env, {
-            harness: null,
-            dryRun: false,
-            onlyCandidateIds: associateIds,
-            precaptured: preview.precaptured,
-          }),
-      );
-      mergeFollowUpReport(report, second);
-    }
-    report.pending = report.pending.filter((p) => !resolvedIds.has(String(p["candidateId"])));
-  } finally {
-    await preview.dispose();
-  }
-}
-
 export function humanImportReport(report: ImportReport): string {
   const lines: string[] = [];
   if (report.dryRun) {
@@ -402,7 +314,10 @@ export function humanImportReport(report: ImportReport): string {
     );
   }
   if (report.pending.length > 0) {
-    lines.push(`Run \`glia candidates\` to inspect pending candidates, then \`glia accept <id>\`.`);
+    lines.push(
+      `${report.dryRun ? "Would skip" : "Skipped"} ${report.pending.length} Session(s) whose Project could not be determined; kept pending.`,
+      "Review them later with `glia candidates --status pending`, then `glia accept <id>` or `glia accept --interactive`.",
+    );
   }
   if (report.prunedWithheld.length > 0) {
     lines.push(

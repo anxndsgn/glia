@@ -317,7 +317,8 @@ async function pickInteractive(
       description: flagged
         ? `flagged: ${hitCount} suspected secret(s) — accepting records the override · ` +
           `${entry.candidate.identity.harnessId} ${entry.candidate.identity.sourceSessionId}`
-        : `${entry.candidate.identity.harnessId} ${entry.candidate.identity.sourceSessionId}`,
+        : `Project undetermined · ${entry.candidate.openingPath === null ? "No opening path recorded" : `Opening path: ${entry.candidate.openingPath}`} · ` +
+          `${entry.candidate.identity.harnessId} ${entry.candidate.identity.sourceSessionId}`,
       group: "",
     };
   });

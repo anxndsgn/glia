@@ -60,6 +60,11 @@ Claude Code or Codex prompts. The setting covers the Project's local worktrees
 A plain import leaves this setting unchanged. After moving the Glia executable,
 run `glia import --auto-save on` again to refresh its hook command.
 
+Import saves Sessions associated with the current Project. Sessions whose Project
+cannot be determined remain pending and are summarized without per-Session prompts.
+Review them later with `glia candidates --status pending`, then associate and save
+selected Sessions with `glia accept <id>` or `glia accept --interactive`.
+
 The first interactive import previews persistence and secret checks before creating
 the Project's local Store. `--json` and `--no-input` are non-interactive. Glia writes
 `glia.json` into the code directory only when `store remote set` is explicitly run.

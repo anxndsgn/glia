@@ -117,7 +117,9 @@ describe("explicit Project enrollment", () => {
     expect(prompt).toContain(`Store: create a Git-backed Store under ${env.home}/projects`);
     expect(prompt).toContain("Sessions: import 0 Session(s) now from 2 discovered Candidate(s)");
     expect(prompt).toContain("Secret review: withhold 1 Candidate(s)");
-    expect(prompt).toContain("Association: 1 Candidate(s) need a Project decision first");
+    expect(prompt).toContain(
+      "Unassociated: skip 1 Candidate(s) whose Project could not be determined",
+    );
     expect(prompt).not.toContain("SessionEnd: capture future Sessions automatically");
     await confirmFirstImport(context(project), { autoSave: "on" }, async (message) => {
       prompt = message;
