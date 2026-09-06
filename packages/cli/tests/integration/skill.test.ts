@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CLI_VERSION } from "../../src/core/build-info.ts";
 import {
@@ -109,15 +109,75 @@ describe("skill install", () => {
     expect(await exists(join(env.worktree, "glia", "SKILL.md"))).toBe(false);
   });
 
-  test("a symlinked skill directory is refused instead of written through", async () => {
+  test("a symlinked skill directory is replaced without changing its target", async () => {
     const elsewhere = join(env.root, "elsewhere");
     await mkdir(join(home, ".claude", "skills"), { recursive: true });
     await mkdir(elsewhere, { recursive: true });
+    await writeFile(join(elsewhere, "SKILL.md"), "original skill");
+    await writeFile(join(elsewhere, "notes.md"), "keep me");
     await symlink(elsewhere, join(home, ".claude", "skills", "glia"));
+    await runSkillInstall(ctx(), { ...noFlags(), claude: true, force: false });
+    expect((await lstat(join(globalClaude(), "glia"))).isDirectory()).toBe(true);
+    expect(await readFile(skillFileAt(globalClaude()), "utf8")).toBe(
+      renderSkillContent(CLI_VERSION),
+    );
+    expect(await readFile(join(elsewhere, "SKILL.md"), "utf8")).toBe("original skill");
+    expect(await readFile(join(elsewhere, "notes.md"), "utf8")).toBe("keep me");
+  });
+
+  for (const dangling of [false, true]) {
+    test(`a ${dangling ? "dangling" : "valid"} SKILL.md symlink is replaced without writing through`, async () => {
+      const elsewhere = join(env.root, "external-skill.md");
+      const dir = join(globalClaude(), "glia");
+      await mkdir(dir, { recursive: true });
+      if (!dangling) await writeFile(elsewhere, "original skill");
+      await symlink(elsewhere, skillFileAt(globalClaude()));
+      await writeFile(join(dir, "notes.md"), "keep me");
+      await runSkillInstall(ctx(), { ...noFlags(), claude: true, force: false });
+      expect((await lstat(skillFileAt(globalClaude()))).isSymbolicLink()).toBe(false);
+      expect(await readFile(skillFileAt(globalClaude()), "utf8")).toBe(
+        renderSkillContent(CLI_VERSION),
+      );
+      expect(await readFile(join(dir, "notes.md"), "utf8")).toBe("keep me");
+      if (dangling) expect(await exists(elsewhere)).toBe(false);
+      else expect(await readFile(elsewhere, "utf8")).toBe("original skill");
+    });
+  }
+
+  test("an up-to-date directory symlink is left intact", async () => {
+    await runSkillInstall(ctx(), { ...noFlags(), agents: true, force: false });
+    await mkdir(globalClaude(), { recursive: true });
+    const dir = join(globalClaude(), "glia");
+    await symlink(join(globalAgents(), "glia"), dir);
+    const outcome = await runSkillInstall(ctx(), { ...noFlags(), force: false });
+    expect(
+      (outcome.json as { results: { status: string }[] }).results.map((r) => r.status),
+    ).toEqual(["up_to_date", "up_to_date"]);
+    expect((await lstat(dir)).isSymbolicLink()).toBe(true);
+  });
+
+  test("declining replacement leaves a directory symlink and its target intact", async () => {
+    const elsewhere = join(env.root, "elsewhere");
+    await mkdir(globalClaude(), { recursive: true });
+    await mkdir(elsewhere);
+    await writeFile(join(elsewhere, "SKILL.md"), "original skill");
+    const dir = join(globalClaude(), "glia");
+    await symlink(elsewhere, dir);
+    const prompts: SkillPrompts = {
+      pickScope: async () => null,
+      pickHarnesses: async () => null,
+      pickRemovals: async () => null,
+      confirmOverwrite: async () => false,
+    };
     await expect(
-      runSkillInstall(ctx(), { ...noFlags(), claude: true, force: false }),
-    ).rejects.toMatchObject({ code: "USAGE" });
-    expect(await exists(join(elsewhere, "SKILL.md"))).toBe(false);
+      runSkillInstall(ctx({ inputDisabled: false, prompts }), {
+        ...noFlags(),
+        claude: true,
+        force: false,
+      }),
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect((await lstat(dir)).isSymbolicLink()).toBe(true);
+    expect(await readFile(join(elsewhere, "SKILL.md"), "utf8")).toBe("original skill");
   });
 
   test("declining the overwrite confirmation cancels and changes nothing", async () => {

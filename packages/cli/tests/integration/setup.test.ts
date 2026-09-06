@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { installHookConfig, removeHookConfig } from "../../src/core/hooks/config.ts";
 import {
@@ -159,6 +159,24 @@ describe("hook config merge", () => {
 });
 
 describe("setup umbrella", () => {
+  test("repairs a dangling skill directory symlink and remains idempotent", async () => {
+    const skillsDir = join(userHome, ".claude", "skills");
+    const dir = join(skillsDir, "glia");
+    await mkdir(skillsDir, { recursive: true });
+    await symlink("../../.agents/skills/glia", dir);
+    const first = await runSetup(setupContext());
+    const skillResults = (outcome: typeof first) =>
+      (outcome.json as { skill: { results: { status: string }[] } }).skill.results.map(
+        (row) => row.status,
+      );
+    expect(skillResults(first)).toEqual(["created", "created"]);
+    expect((await lstat(dir)).isDirectory()).toBe(true);
+    expect(
+      await Bun.file(join(userHome, ".claude", ".agents", "skills", "glia", "SKILL.md")).exists(),
+    ).toBe(false);
+    expect(skillResults(await runSetup(setupContext()))).toEqual(["up_to_date", "up_to_date"]);
+  });
+
   test("installs both present Harness hooks and both skill conventions idempotently", async () => {
     await mkdir(env.claudeHome, { recursive: true });
     await mkdir(env.codexHome, { recursive: true });

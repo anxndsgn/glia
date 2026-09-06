@@ -1,4 +1,4 @@
-import { lstat, mkdir, rm, rmdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, rm, rmdir, unlink, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { CLI_VERSION } from "../build-info.ts";
 import { readFileIfPresent } from "../state/atomic-file.ts";
@@ -74,6 +74,16 @@ async function assertNoSymlink(path: string): Promise<void> {
     }
   } catch (error) {
     if (error instanceof GliaError) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+/** Replace the installation entry without modifying a symlink's target,
+ * including when the target no longer exists. */
+async function unlinkIfSymlink(path: string): Promise<void> {
+  try {
+    if ((await lstat(path)).isSymbolicLink()) await unlink(path);
+  } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
@@ -223,8 +233,8 @@ export async function runSkillInstall(
   for (const plan of plans) {
     if (plan.status === "up_to_date") continue;
     const dir = join(plan.destination.skillsDir, SKILL_NAME);
-    await assertNoSymlink(dir);
-    await assertNoSymlink(join(dir, "SKILL.md"));
+    await unlinkIfSymlink(dir);
+    await unlinkIfSymlink(join(dir, "SKILL.md"));
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SKILL.md"), content, "utf8");
   }
