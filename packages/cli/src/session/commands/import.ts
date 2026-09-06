@@ -141,10 +141,15 @@ export const importCommand: CommandDefinition = {
       await setAutoSave(ctx.project, true);
       automationNote = `\n${hooks.human}\nAutomatic saving enabled for this Project on this machine. Approve the SessionEnd hook in each Harness when prompted.`;
     }
+    const savingEnabled = await autoSaveEnabled(ctx.project);
+    if (!dryRun && !savingEnabled) {
+      automationNote =
+        "\nTo automatically save future Sessions for this Project on this machine, run `glia import --auto-save on`.";
+    }
     return {
       json: {
         ...report,
-        autoSave: await autoSaveEnabled(ctx.project),
+        autoSave: savingEnabled,
         ...(hooks === null ? {} : { hooks: hooks.json }),
       },
       human: humanImportReport(report) + automationNote,
