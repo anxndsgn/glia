@@ -1,4 +1,5 @@
 import { bindingsLockFile } from "../../core/project/paths.ts";
+import { readCacheRoot, readCacheLock } from "../../core/project/read-cache.ts";
 import { loadProjectForRead } from "../../core/project/load.ts";
 import { readSessionMeta } from "../storage/store-layout.ts";
 import { join } from "node:path";
@@ -6,13 +7,6 @@ import { readdir, rm } from "node:fs/promises";
 import { writeJsonAtomic } from "../../core/state/atomic-file.ts";
 import { WriterLease, writerLeaseTimeoutMs } from "../../core/store/lease.ts";
 import { GliaError } from "../../core/output/errors.ts";
-
-export function readCacheRoot(home: string): string {
-  return join(home, "cache", "reads");
-}
-export function readCacheLock(home: string): string {
-  return join(home, "read-cache-lock.sqlite");
-}
 
 export async function locallyForgotten(home: string): Promise<Set<string>> {
   try {

@@ -15,6 +15,7 @@ import {
 import { createReplicaIdentity, readReplicaIdentity } from "./identity.ts";
 import { bindingsLockFile, projectPaths } from "./paths.ts";
 import { realizeProject } from "./realize.ts";
+import { retireReadCache } from "./read-cache.ts";
 
 export interface LoadProjectOptions {
   /** `sync` and `store remote set` use this to proceed against a declared remote before a local Store exists. */
@@ -122,6 +123,7 @@ export async function loadProject(
     const paths = projectPaths(home, projectId);
 
     await realizeProject(worktree, paths, projectId, declaration.store.remote ?? null);
+    await retireReadCache(home, readProjectId(scope.key));
 
     if (options.allowMissingStore !== true && !(await new ProjectStore(paths.storeDir).exists())) {
       throw storeNotRealizedError(projectId);
@@ -141,6 +143,10 @@ export async function loadProject(
 }
 
 const SYNTHESIZED_REPLICA_ID = "__glia_read_only__";
+
+function readProjectId(scopeKey: string): string {
+  return `prj_read_${new Bun.CryptoHasher("sha256").update(scopeKey).digest("hex").slice(0, 32)}`;
+}
 
 /**
  * Resolves an enrolled Project for reads, or synthesizes a read-only Project
@@ -168,7 +174,7 @@ export async function loadProjectForRead(cwd: string, home: string): Promise<Loa
     };
   }
 
-  const synthesizedProjectId = `prj_read_${new Bun.CryptoHasher("sha256").update(scope.key).digest("hex").slice(0, 32)}`;
+  const synthesizedProjectId = readProjectId(scope.key);
   const declaration = authored ?? createDeclaration(synthesizedProjectId);
   return {
     home,

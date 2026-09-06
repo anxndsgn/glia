@@ -24,7 +24,7 @@ import { autoSaveEnabled } from "../../src/core/project/auto-save.ts";
 import { runHookInvocation } from "../../src/session/commands/hook-import.ts";
 import { ProjectStore } from "../../src/core/store/store.ts";
 import { gitOrThrow } from "../../src/core/store/git.ts";
-import { readCacheRoot } from "../../src/session/domain/local-state.ts";
+import { readCacheRoot } from "../../src/core/project/read-cache.ts";
 import type { CommandRunContext } from "../../src/core/session-module.ts";
 
 let env: TestEnv;
@@ -109,6 +109,43 @@ describe("local Session search", () => {
     expect((await search("newlyappended", context)).totalMatches).toBe(1);
     await rm(file);
     expect((await search("newlyappended", context)).totalMatches).toBe(0);
+  });
+
+  test("enrollment retires the native cache including withheld evidence and SQLite sidecars", async () => {
+    const file = await writeClaudeSession(env.claudeHome, {
+      sessionId: "enrollment-secret",
+      cwd: env.worktree,
+      userText: `enrollmentmarker ${FAKE_KEY}`,
+    });
+    const context = await ctx();
+    expect((await search("enrollmentmarker", context)).totalMatches).toBe(1);
+    const prefix = `${context.project.declaration.projectId}-v`;
+    const root = readCacheRoot(env.home);
+    const files = (await readdir(root)).filter((name) => name.startsWith(prefix));
+    expect(files.length).toBeGreaterThan(0);
+    // Retire every schema version and crash-residue sidecar, not just the current database.
+    for (const suffix of [".sqlite", ".sqlite-wal", ".sqlite-shm"]) {
+      await Bun.write(join(root, `${prefix}0${suffix}`), "cached evidence");
+    }
+    const unrelated = join(env.root, "unrelated");
+    await mkdir(unrelated);
+    const otherContext = await ctx(unrelated);
+    await search("enrollmentmarker", otherContext);
+    const otherFiles = (await readdir(root)).filter((name) =>
+      name.startsWith(`${otherContext.project.declaration.projectId}-v`),
+    );
+    expect(otherFiles.length).toBeGreaterThan(0);
+
+    const project = await save();
+    expect(project.declaration.projectId).not.toBe(context.project.declaration.projectId);
+    expect((await readdir(root)).filter((name) => name.startsWith(prefix))).toEqual([]);
+    for (const name of otherFiles) expect(await Bun.file(join(root, name)).exists()).toBe(true);
+    await expect(search("enrollmentmarker", context)).rejects.toMatchObject({
+      code: "BINDING_CHANGED",
+    });
+    expect((await readdir(root)).filter((name) => name.startsWith(prefix))).toEqual([]);
+    await rm(file);
+    expect((await search("enrollmentmarker")).totalMatches).toBe(0);
   });
 
   test("local additions overlay a saved Session without changing Store; --saved and source loss use snapshot", async () => {

@@ -11,7 +11,10 @@ import { readJsonlLines } from "../adapters/jsonl.ts";
 import { discoverCandidates } from "../domain/discover.ts";
 import { listArchiveMarkers } from "../domain/archive.ts";
 import { readSessionConflict } from "../domain/conflict.ts";
-import { locallyForgotten, readCacheRoot, readCacheLock } from "../domain/local-state.ts";
+import { locallyForgotten } from "../domain/local-state.ts";
+import { readCacheRoot, readCacheLock } from "../../core/project/read-cache.ts";
+import { loadProjectForRead } from "../../core/project/load.ts";
+import { GliaError } from "../../core/output/errors.ts";
 import { bundleDigest, manifestOf } from "../storage/bundle.ts";
 import {
   listSessionIds,
@@ -142,6 +145,16 @@ export async function ensureReadableProjection(
   let staging: string | null = null;
   try {
     cacheLease = await WriterLease.acquire(readCacheLock(project.home), writerLeaseTimeoutMs(env));
+    // A reader resolved before enrollment must not recreate the retired cache.
+    if (project.enrollment.kind === "unenrolled") {
+      const current = await loadProjectForRead(project.worktree, project.home);
+      if (current.declaration.projectId !== project.declaration.projectId) {
+        throw new GliaError(
+          "BINDING_CHANGED",
+          "Project was enrolled during query preparation; repeat the query",
+        );
+      }
+    }
     const root = readCacheRoot(project.home);
     await mkdir(root, { recursive: true, mode: 0o700 });
     // The cache writer lease proves any prior capture directory is crash residue.
