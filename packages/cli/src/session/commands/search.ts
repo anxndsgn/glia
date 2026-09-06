@@ -12,11 +12,10 @@ import {
 } from "./shared.ts";
 import { alsoInMarker, familyNote } from "./family-display.ts";
 import { subagentMatchMarker, subagentNote } from "./subagent-display.ts";
-import { ensureProjection } from "../projection/publish.ts";
+import { queryProjection, readableProjectionJson, readableNotes } from "../projection/readable.ts";
 import {
   getLogicalEventsBySeqs,
   listLogicalSeqs,
-  openProjection,
   searchFileTouches,
   searchText,
   type EventFilter,
@@ -56,11 +55,12 @@ export const searchCommand: CommandDefinition = {
   name: "search",
   projectAccess: "read",
   unenrolledRead: "empty",
-  description: "search accepted Store evidence; never imports and never changes the Store",
+  description: "search local and saved evidence; never imports and never changes the Store",
   arguments: [
     { name: "[query]", description: "text query; every term matches as a substring (see --word)" },
   ],
   options: [
+    { flags: "--saved", description: "read only saved Store evidence" },
     {
       flags: "--compact",
       description:
@@ -147,10 +147,9 @@ export const searchCommand: CommandDefinition = {
       includeArchived: params.includeArchived,
     };
 
-    const handle = await ensureProjection(ctx.project, ctx.env);
-    const db = openProjection(handle.dbPath);
+    const handle = await queryProjection(ctx, options["saved"] === true);
+    const db = handle.db;
     try {
-      const projection = { storeCommit: handle.storeCommit, stale: handle.stale };
       const finish = async <M extends { eventSeq: number; runLastSeq: number }>(
         mode: string,
         result: SearchResult<M>,
@@ -182,11 +181,21 @@ export const searchCommand: CommandDefinition = {
             familyCollapsedMatches: result.familyCollapsedMatches,
             ...entries,
             parameters,
-            projection,
+            projection: readableProjectionJson(
+              handle,
+              result.groups.map((g) => g.sessionId),
+            ),
           },
-          human: renderGroups(result, params, contexts, renderMatch, noun),
+          human:
+            renderGroups(result, params, contexts, renderMatch, noun) +
+            readableNotes(
+              handle,
+              result.groups.map((g) => g.sessionId),
+            ),
         };
-        return await addZeroResultAdvisories(ctx, result.totalMatches, outcome);
+        return options["saved"] === true
+          ? await addZeroResultAdvisories(ctx, result.totalMatches, outcome)
+          : outcome;
       };
       if (params.query !== null) {
         return await finish(

@@ -1,8 +1,9 @@
+import { locallyForgotten } from "../domain/local-state.ts";
 import type { CommandDefinition } from "../../core/session-module.ts";
 import type { CommandOutcome } from "../../core/output/result.ts";
 import { GliaError } from "../../core/output/errors.ts";
-import { ensureProjection } from "../projection/publish.ts";
-import { getSessionDetail, openProjection } from "../projection/query.ts";
+import { queryProjection, readableProjectionJson, readableNotes } from "../projection/readable.ts";
+import { getSessionDetail } from "../projection/query.ts";
 import { requireSessionUnconflicted } from "../domain/conflict.ts";
 import { missingSessionError } from "../domain/deletion.ts";
 import { subagentNote } from "./subagent-display.ts";
@@ -27,18 +28,33 @@ function subagentLines(detail: SessionDetail): string[] {
 export const showCommand: CommandDefinition = {
   name: "show",
   projectAccess: "read",
-  unenrolledRead: "error",
-  description: "show one accepted Session's objective metadata",
+  unenrolledRead: "empty",
+  description: "show one local or saved Session's objective metadata",
   arguments: [{ name: "session-id", description: "the Session ID" }],
-  async run(ctx, args): Promise<CommandOutcome> {
+  options: [{ flags: "--saved", description: "read only the saved Store version" }],
+  async run(ctx, args, options): Promise<CommandOutcome> {
     const sessionId = args[0];
     if (!sessionId) throw new GliaError("USAGE", "session show requires a <session-id>");
     await requireSessionUnconflicted(ctx.project.paths.storeDir, sessionId);
-    const handle = await ensureProjection(ctx.project, ctx.env);
-    const db = openProjection(handle.dbPath);
+    const handle = await queryProjection(ctx, options["saved"] === true);
+    const db = handle.db;
     try {
       const detail = getSessionDetail(db, sessionId);
-      if (!detail) throw await missingSessionError(ctx.project.paths.storeDir, sessionId);
+      if (!detail) {
+        if ((await locallyForgotten(ctx.project.home)).has(sessionId))
+          throw new GliaError("SESSION_DELETED", `Session ${sessionId} was forgotten locally`, {
+            sessionId,
+          });
+        const missing = await missingSessionError(ctx.project.paths.storeDir, sessionId);
+        if (missing.code === "SESSION_DELETED") throw missing;
+        if (handle.issues.length > 0 || options["revision"] !== undefined)
+          throw new GliaError(
+            "SOURCE_INCOMPLETE",
+            "Session evidence is unavailable in this query",
+            { sessionId, issues: handle.issues },
+          );
+        throw missing;
+      }
       const kinds = Object.entries(detail.eventKinds)
         .map(([kind, n]) => `${kind}=${n}`)
         .join(" ");
@@ -85,7 +101,7 @@ export const showCommand: CommandDefinition = {
         detail.continuationParent ? `  continues: ${detail.continuationParent}` : null,
         ...subagentLines(detail),
         ...familyLines,
-        `  revision: ${detail.revisionDigest.slice(0, 12)} accepted ${detail.acceptedAt}`,
+        `  revision: ${detail.revisionDigest.slice(0, 12)}${detail.acceptedAt ? ` saved ${detail.acceptedAt}` : " (not saved)"}`,
         `  events: ${detail.eventCount} (${kinds})`,
         `  file touches: ${detail.fileTouchCount}`,
         `  bundle files: ${detail.artifacts.length}`,
@@ -105,8 +121,11 @@ export const showCommand: CommandDefinition = {
         ...rest
       } = detail;
       return {
-        json: { session: { ...rest, subagent: subagentJson(detail, spawnedSubagents) } },
-        human,
+        json: {
+          session: { ...rest, subagent: subagentJson(detail, spawnedSubagents) },
+          projection: readableProjectionJson(handle, [sessionId]),
+        },
+        human: human + readableNotes(handle, [sessionId]),
       };
     } finally {
       db.close();

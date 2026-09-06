@@ -1,3 +1,6 @@
+import { autoSaveEnabled, setAutoSave } from "../../core/project/auto-save.ts";
+import { runHookInstall } from "../../core/commands/hook.ts";
+import { currentSelfCommand, hookExecutablePath } from "./hook-import.ts";
 import { PROJECTION_DEFERRED_NOTE } from "../../core/session-module.ts";
 import type { CommandDefinition, CommandRunContext } from "../../core/session-module.ts";
 import type { CommandOutcome } from "../../core/output/result.ts";
@@ -6,19 +9,12 @@ import { confirmProceed } from "../../core/output/confirm.ts";
 import { withProgress } from "../../core/output/progress.ts";
 import { isHarnessId, type HarnessId } from "../../core/harnesses/ids.ts";
 import { previewEnrollment, runImport, type ImportReport } from "../domain/import.ts";
-import { discoverCandidates } from "../domain/discover.ts";
-import {
-  associateCandidate,
-  ignoreCandidate,
-  mutateDiscoveryState,
-} from "../domain/discovery-state.ts";
-import { previewCandidateFamilies, type FamilyHint } from "../domain/family-hint.ts";
+import { ignoreCandidate, mutateDiscoveryState } from "../domain/discovery-state.ts";
+import type { FamilyHint } from "../domain/family-hint.ts";
 import { familyHintText } from "./family-display.ts";
 import type { SecretHit, UnscannedFile } from "../domain/secret-detection.ts";
 import { renderSuspectedHits } from "./render-secret-hits.ts";
 import { ageDays } from "../domain/advisories.ts";
-import { HARNESS_IDS } from "../../core/harnesses/ids.ts";
-import { managedHookInstalled } from "../../core/hooks/config.ts";
 
 export function parseHarnessOption(value: unknown): HarnessId | null {
   if (value === undefined) return null;
@@ -36,9 +32,6 @@ export async function confirmFirstImport(
 ): Promise<void> {
   const harness = parseHarnessOption(options["harness"]);
   const preview = await previewEnrollment(ctx.project, ctx.env, harness);
-  const hooksInstalled = (
-    await Promise.all(HARNESS_IDS.map((id) => managedHookInstalled(id, ctx.env).catch(() => false)))
-  ).some(Boolean);
   const lines = [
     `Enroll repository ${ctx.project.worktree} with Glia?`,
     "",
@@ -47,9 +40,11 @@ export async function confirmFirstImport(
     `  Secret review: withhold ${preview.withheld} Candidate(s) pending explicit acceptance`,
   ];
   if (preview.pending > 0) {
-    lines.push(`  Association: ${preview.pending} Candidate(s) need a Project decision first`);
+    lines.push(
+      `  Unassociated: skip ${preview.pending} Candidate(s) whose Project could not be determined`,
+    );
   }
-  if (hooksInstalled) {
+  if (options["autoSave"] === "on") {
     lines.push("  SessionEnd: capture future Sessions automatically for this repository");
   }
   if (preview.sourceErrors.length > 0) {
@@ -73,15 +68,21 @@ export async function confirmFirstImport(
 
 export const importCommand: CommandDefinition = {
   name: "import",
-  projectAccess: (options) => (options["dryRun"] === true ? "read" : "write"),
+  projectAccess: (options) =>
+    options["dryRun"] === true || options["autoSave"] === "off" ? "read" : "write",
   unenrolledRead: "empty",
   description:
     "discover Sessions, accept associated Candidates into the Store, and refresh the projection; " +
-    "on a terminal, pending and flagged Candidates are resolved with prompts (skip with --no-input)",
+    "leave unassociated Candidates pending; on a terminal, review flagged Candidates (skip with --no-input)",
   options: [
     {
+      flags: "--auto-save <mode>",
+      description:
+        "on: import now and enable future automatic saving; off: disable automatic saving without importing",
+    },
+    {
       flags: "--hook",
-      description: "run the silent SessionEnd automation path (installed by glia setup)",
+      description: "run the silent SessionEnd automation path (installed by --auto-save on)",
     },
     { flags: "--harness <id>", description: "only inspect one harness (codex or claude-code)" },
     {
@@ -94,6 +95,24 @@ export const importCommand: CommandDefinition = {
     // the flag and routes through the machine-local hook invocation instead.
     const harness = parseHarnessOption(options["harness"]);
     const dryRun = options["dryRun"] === true;
+    const autoSave = options["autoSave"];
+    if (autoSave !== undefined && autoSave !== "on" && autoSave !== "off") {
+      throw new GliaError("USAGE", "--auto-save must be on or off");
+    }
+    if (autoSave !== undefined && (dryRun || harness !== null)) {
+      throw new GliaError(
+        "USAGE",
+        "--auto-save applies to the whole Project and cannot combine with --dry-run or --harness",
+      );
+    }
+    if (autoSave === "off") {
+      if (ctx.project.enrollment.kind === "enrolled") await setAutoSave(ctx.project, false);
+      return {
+        json: { autoSave: false },
+        human:
+          "Automatic saving disabled for this Project on this machine. Saved Sessions are retained.",
+      };
+    }
     // Interactive resolution follows the terminal: --json, --no-input, and
     // piped stdio all disable it, so scripted imports never block on a prompt.
     const interactive = !ctx.inputDisabled && !dryRun;
@@ -108,16 +127,33 @@ export const importCommand: CommandDefinition = {
           : `Accepted ${r.accepted.length} revision(s)`,
       () => runImport(ctx.project, ctx.env, { harness, dryRun, onlyCandidateIds: null }),
     );
-    // Pending resolution runs first: a Candidate associated here is
-    // re-imported with the secret gate intact, so its flagged bytes join
-    // the flagged prompt below instead of being accepted silently.
-    if (interactive && report.pending.length > 0) {
-      await resolvePendingInteractively(ctx, harness, report);
-    }
     if (interactive && report.flagged.length > 0) {
       await resolveFlaggedInteractively(ctx, report);
     }
-    return { json: report, human: humanImportReport(report) };
+    let automationNote = "";
+    let hooks: CommandOutcome | null = null;
+    if (autoSave === "on") {
+      hooks = await runHookInstall({
+        env: ctx.env,
+        executablePath: hookExecutablePath(),
+        selfCommand: currentSelfCommand(),
+      });
+      await setAutoSave(ctx.project, true);
+      automationNote = `\n${hooks.human}\nAutomatic saving enabled for this Project on this machine. Approve the SessionEnd hook in each Harness when prompted.`;
+    }
+    const savingEnabled = await autoSaveEnabled(ctx.project);
+    if (!dryRun && !savingEnabled) {
+      automationNote =
+        "\nTo automatically save future Sessions for this Project on this machine, run `glia import --auto-save on`.";
+    }
+    return {
+      json: {
+        ...report,
+        autoSave: savingEnabled,
+        ...(hooks === null ? {} : { hooks: hooks.json }),
+      },
+      human: humanImportReport(report) + automationNote,
+    };
   },
 };
 
@@ -206,85 +242,6 @@ async function resolveFlaggedInteractively(
   report.flagged = report.flagged.filter((f) => !resolvedIds.has(String(f["candidateId"])));
 }
 
-/**
- * Presents each pending Candidate and asks associate, skip, or ignore.
- * Newly associated Candidates are accepted by a follow-up run that keeps
- * the secret-detection gate: their flagged bytes join `report.flagged`
- * for the flagged prompt instead of being accepted silently.
- */
-async function resolvePendingInteractively(
-  ctx: CommandRunContext,
-  harness: HarnessId | null,
-  report: ImportReport,
-): Promise<void> {
-  const { select, isCancel } = await import("@clack/prompts");
-  // The main run's report carries only serializable summaries, so this
-  // pass re-discovers to get the full Candidates the family-hint preview
-  // captures from; it runs only when pending Candidates exist.
-  const discovery = await discoverCandidates(ctx.project, ctx.env, harness);
-  const pending = discovery.candidates.filter((c) => c.classification.kind === "pending");
-  if (pending.length === 0) return;
-  const preview = await previewCandidateFamilies(
-    ctx.project,
-    pending.map((entry) => entry.candidate),
-  );
-  try {
-    const associateIds: string[] = [];
-    const ignoreIds: string[] = [];
-    const resolvedIds = new Set<string>();
-    for (const { candidate } of pending) {
-      const hint = preview.hints.get(candidate.candidateId);
-      const familyNote = hint === undefined ? "" : `${familyHintText(hint)}\n`;
-      const choice = await select({
-        message:
-          `${familyNote}Session ${candidate.identity.sourceSessionId} (${candidate.identity.harnessId}) has no resolvable opening path. ` +
-          "Associate it with this project?",
-        options: [
-          { value: "associate", label: "Associate with this project" },
-          { value: "skip", label: "Decide later (keep pending)" },
-          { value: "ignore", label: "Ignore on this machine" },
-        ],
-      });
-      if (isCancel(choice)) throw new GliaError("CANCELLED", "import cancelled");
-      if (choice === "associate") {
-        associateIds.push(candidate.candidateId);
-        resolvedIds.add(candidate.candidateId);
-      } else if (choice === "ignore") {
-        ignoreIds.push(candidate.candidateId);
-        resolvedIds.add(candidate.candidateId);
-      }
-    }
-    if (associateIds.length > 0 || ignoreIds.length > 0) {
-      const decidedAt = new Date().toISOString();
-      await mutateDiscoveryState(ctx.project, ctx.env, (state) => {
-        for (const candidateId of associateIds) {
-          associateCandidate(state, candidateId, ctx.project.declaration.projectId, decidedAt);
-        }
-        for (const candidateId of ignoreIds) ignoreCandidate(state, candidateId);
-        return true;
-      });
-    }
-    if (associateIds.length > 0) {
-      const second = await withProgress(
-        ctx,
-        `Accepting ${associateIds.length} associated candidate(s)`,
-        (r) => `Accepted ${r.accepted.length} revision(s)`,
-        () =>
-          runImport(ctx.project, ctx.env, {
-            harness: null,
-            dryRun: false,
-            onlyCandidateIds: associateIds,
-            precaptured: preview.precaptured,
-          }),
-      );
-      mergeFollowUpReport(report, second);
-    }
-    report.pending = report.pending.filter((p) => !resolvedIds.has(String(p["candidateId"])));
-  } finally {
-    await preview.dispose();
-  }
-}
-
 export function humanImportReport(report: ImportReport): string {
   const lines: string[] = [];
   if (report.dryRun) {
@@ -362,7 +319,10 @@ export function humanImportReport(report: ImportReport): string {
     );
   }
   if (report.pending.length > 0) {
-    lines.push(`Run \`glia candidates\` to inspect pending candidates, then \`glia accept <id>\`.`);
+    lines.push(
+      `${report.dryRun ? "Would skip" : "Skipped"} ${report.pending.length} Session(s) whose Project could not be determined; kept pending.`,
+      "Review them later with `glia candidates --status pending`, then `glia accept <id>` or `glia accept --interactive`.",
+    );
   }
   if (report.prunedWithheld.length > 0) {
     lines.push(

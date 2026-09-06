@@ -14,8 +14,9 @@ export async function directoryExists(path: string): Promise<boolean> {
   try {
     await readdir(path);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 

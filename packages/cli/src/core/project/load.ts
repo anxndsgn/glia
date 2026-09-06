@@ -1,3 +1,5 @@
+import { sep } from "node:path";
+import { projectScope, scopeMapping } from "./scope.ts";
 import { createDeclaration, readDeclaration } from "../config/glia-json.ts";
 import { GliaError } from "../output/errors.ts";
 import { shellQuote } from "../output/shell.ts";
@@ -5,15 +7,15 @@ import { WriterLease, writerLeaseTimeoutMs } from "../store/lease.ts";
 import { ProjectStore } from "../store/store.ts";
 import type { LoadedProject } from "../session-module.ts";
 import {
+  BindingIndex,
   bindingsBindWorktree,
   bindingsRootWorktree,
-  mapWorktreeToProject,
   readBindings,
 } from "./bindings.ts";
 import { createReplicaIdentity, readReplicaIdentity } from "./identity.ts";
 import { bindingsLockFile, projectPaths } from "./paths.ts";
 import { realizeProject } from "./realize.ts";
-import { resolveWorktreeTopLevel } from "./resolve.ts";
+import { retireReadCache } from "./read-cache.ts";
 
 export interface LoadProjectOptions {
   /** `sync` and `store remote set` use this to proceed against a declared remote before a local Store exists. */
@@ -58,6 +60,27 @@ function refuseAliasOnlyWorktree(worktree: string, projectId: string): never {
   );
 }
 
+/** A sibling worktree or ordinary subdirectory inherits the bound Project's declaration.
+ * Conflicting declarations need an explicit local choice rather than an arbitrary remote. */
+async function boundDeclaration(home: string, projectId: string) {
+  const bindings = await readBindings(projectPaths(home, projectId).bindingsFile);
+  let selected: Awaited<ReturnType<typeof readDeclaration>> = null;
+  for (const root of bindings?.roots ?? []) {
+    const declaration = await readDeclaration(root);
+    if (declaration?.projectId !== projectId) continue;
+    if (selected !== null && JSON.stringify(selected) !== JSON.stringify(declaration)) {
+      throw new GliaError(
+        "BINDING_CONFLICT",
+        "bound roots have different declarations; add an explicit glia.json declaration in this directory",
+        { projectId },
+        ["glia project list"],
+      );
+    }
+    selected = declaration;
+  }
+  return selected ?? createDeclaration(projectId);
+}
+
 /**
  * Resolves or creates the machine-local Project identity for a worktree.
  * The declaration remains virtual until `glia store remote set` writes it.
@@ -67,7 +90,8 @@ export async function loadProject(
   home: string,
   options: LoadProjectOptions = {},
 ): Promise<LoadedProject> {
-  const worktree = await resolveWorktreeTopLevel(cwd);
+  const scope = await projectScope(cwd);
+  const worktree = scope.root;
   // First use chooses a Project ID and creates its machine-local Binding.
   // Keep that whole realization transaction under the same machine-global
   // lease used by import ownership decisions: concurrent first use must not
@@ -79,7 +103,7 @@ export async function loadProject(
     // Filesystem ownership wins over a declaration when deciding whether a
     // historical alias may be realized. Otherwise a declaration naming a
     // different Project could silently create a second claim for this path.
-    const mapped = await mapWorktreeToProject(home, worktree);
+    const mapped = await scopeMapping(scope, home);
     if (mapped !== null) {
       const bindings = await readBindings(projectPaths(home, mapped.projectId).bindingsFile);
       if (
@@ -94,11 +118,12 @@ export async function loadProject(
       }
     }
     const projectId = authored?.projectId ?? mapped?.projectId ?? `prj_${Bun.randomUUIDv7()}`;
-    const declaration = authored ?? createDeclaration(projectId);
+    const declaration = authored ?? (await boundDeclaration(home, projectId));
     const identity = (await readReplicaIdentity(home)) ?? (await createReplicaIdentity(home));
     const paths = projectPaths(home, projectId);
 
     await realizeProject(worktree, paths, projectId, declaration.store.remote ?? null);
+    await retireReadCache(home, readProjectId(scope.key));
 
     if (options.allowMissingStore !== true && !(await new ProjectStore(paths.storeDir).exists())) {
       throw storeNotRealizedError(projectId);
@@ -119,35 +144,37 @@ export async function loadProject(
 
 const SYNTHESIZED_REPLICA_ID = "__glia_read_only__";
 
+function readProjectId(scopeKey: string): string {
+  return `prj_read_${new Bun.CryptoHasher("sha256").update(scopeKey).digest("hex").slice(0, 32)}`;
+}
+
 /**
  * Resolves an enrolled Project for reads, or synthesizes a read-only Project
  * whose paths are deliberately unrelated to any declared Project identity.
  */
 export async function loadProjectForRead(cwd: string, home: string): Promise<LoadedProject> {
-  const worktree = await resolveWorktreeTopLevel(cwd);
+  const scope = await projectScope(cwd);
+  const worktree = scope.root;
   const authored = await readDeclaration(worktree);
-  const mapped = await mapWorktreeToProject(home, worktree);
+  const mapped = await scopeMapping(scope, home);
 
   if (mapped !== null) {
     if (authored !== null && authored.projectId !== mapped.projectId) {
       throw declarationMismatchError(worktree, authored.projectId, mapped.projectId);
     }
     const paths = projectPaths(home, mapped.projectId);
-    if (!(await new ProjectStore(paths.storeDir).exists())) {
-      throw storeNotRealizedError(mapped.projectId);
-    }
     const identity = await readReplicaIdentity(home);
     return {
       home,
       worktree,
-      declaration: authored ?? createDeclaration(mapped.projectId),
+      declaration: authored ?? (await boundDeclaration(home, mapped.projectId)),
       paths,
       replicaId: identity?.replicaId ?? SYNTHESIZED_REPLICA_ID,
       enrollment: { kind: "enrolled" },
     };
   }
 
-  const synthesizedProjectId = `prj_read_${Bun.randomUUIDv7()}`;
+  const synthesizedProjectId = readProjectId(scope.key);
   const declaration = authored ?? createDeclaration(synthesizedProjectId);
   return {
     home,
@@ -170,22 +197,33 @@ export async function loadExistingProject(
   cwd: string,
   home: string,
 ): Promise<LoadedProject | null> {
-  const worktree = await resolveWorktreeTopLevel(cwd);
+  const scope = await projectScope(cwd);
+  const worktree = scope.root;
   const authored = await readDeclaration(worktree);
-  const mapped = authored === null ? await mapWorktreeToProject(home, worktree) : null;
+  const mapped = await scopeMapping(scope, home);
+  if (mapped !== null && authored !== null && authored.projectId !== mapped.projectId) return null;
   const projectId = authored?.projectId ?? mapped?.projectId ?? null;
   if (projectId === null) return null;
 
   const paths = projectPaths(home, projectId);
   const bindings = await readBindings(paths.bindingsFile);
-  if (bindings === null || !bindingsRootWorktree(bindings, worktree)) return null;
+  if (bindings === null) return null;
+  if (bindingsBindWorktree(bindings, worktree) && !bindingsRootWorktree(bindings, worktree))
+    return null;
+  const admitted = scope.git
+    ? scope.roots.some((root) => bindingsRootWorktree(bindings, root))
+    : bindings.roots.some((root) => worktree === root || worktree.startsWith(root + sep));
+  if (!admitted) {
+    const ordinaryOwner = await new BindingIndex(home).mapOrdinaryAncestor(worktree, true);
+    if (ordinaryOwner?.projectId !== projectId) return null;
+  }
 
   const identity = await readReplicaIdentity(home);
   if (identity === null) return null;
   return {
     home,
     worktree,
-    declaration: authored ?? createDeclaration(projectId),
+    declaration: authored ?? (await boundDeclaration(home, projectId)),
     paths,
     replicaId: identity.replicaId,
     enrollment: { kind: "enrolled" },

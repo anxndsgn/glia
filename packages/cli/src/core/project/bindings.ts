@@ -1,8 +1,9 @@
+import { projectScope } from "./scope.ts";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { realpathSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { projectPaths } from "./paths.ts";
-import { resolveWorktreeTopLevel } from "./resolve.ts";
+import { resolveWorktreeTopLevel, worktreeTopLevelOrNull } from "./resolve.ts";
 import { requireSupportedSchemaVersion } from "../state/schema-version.ts";
 import { writeJsonAtomic } from "../state/atomic-file.ts";
 import { GliaError } from "../output/errors.ts";
@@ -202,10 +203,26 @@ export class BindingIndex {
         // capture new Sessions at that path.
         const worktree = await resolveWorktreeTopLevel(probe);
         if (missing) return { resolved: false, mapping: null };
-        return { resolved: true, mapping: await this.mapWorktree(worktree) };
+        const direct = await this.mapWorktree(worktree);
+        if (direct !== null) return { resolved: true, mapping: direct };
+        const scope = await projectScope(worktree);
+        const owners = new Set<string>();
+        for (const root of scope.roots) {
+          const owner = await this.mapWorktree(root);
+          if (owner !== null) owners.add(owner.projectId);
+        }
+        return {
+          resolved: true,
+          mapping:
+            owners.size === 1
+              ? { projectId: [...owners][0]! }
+              : owners.size === 0
+                ? await this.mapOrdinaryAncestor(openingPath)
+                : null,
+        };
       } catch (error) {
         if (error instanceof GliaError && error.code === "NOT_A_GIT_WORKTREE") {
-          return { resolved: !missing, mapping: null };
+          return { resolved: !missing, mapping: missing ? null : await this.mapPath(openingPath) };
         }
         const code = (error as NodeJS.ErrnoException).code;
         if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
@@ -221,6 +238,23 @@ export class BindingIndex {
       if (parent === probe) return { resolved: false, mapping: null };
       probe = parent;
     }
+  }
+
+  /** An ordinary-directory scope can contain an otherwise unbound nested repository. */
+  async mapOrdinaryAncestor(path: string, rootsOnly = false): Promise<PathMapping | null> {
+    const owner = await this.mapPath(path);
+    if (owner === null) return null;
+    const bindings = await this.read(projectPaths(this.#home, owner.projectId).bindingsFile);
+    const roots = [...(bindings?.roots ?? []), ...(rootsOnly ? [] : (bindings?.aliases ?? []))];
+    if (this.#overlay?.projectId === owner.projectId) roots.push(this.#overlay.worktree);
+    for (const root of roots) {
+      if (
+        isWithin(normalizeBoundPath(root), normalizeBoundPath(path)) &&
+        (await worktreeTopLevelOrNull(root)) === null
+      )
+        return owner;
+    }
+    return null;
   }
 
   async mapOpeningPath(openingPath: string): Promise<PathMapping | null> {

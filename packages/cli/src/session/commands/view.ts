@@ -1,13 +1,13 @@
+import { locallyForgotten } from "../domain/local-state.ts";
 import type { CommandDefinition } from "../../core/session-module.ts";
 import type { CommandOutcome } from "../../core/output/result.ts";
 import { GliaError } from "../../core/output/errors.ts";
 import { LABEL_WIDTH, lineText, positiveIntOrNull, repeatedValues, seqRange } from "./shared.ts";
-import { ensureProjection } from "../projection/publish.ts";
+import { queryProjection, readableProjectionJson, readableNotes } from "../projection/readable.ts";
 import {
   getEventBySeq,
   getSession,
   getSessionSourceFiles,
-  openProjection,
   spawnedSubagentSessions,
   viewTimeline,
   type SessionRow,
@@ -34,10 +34,15 @@ const TIMESTAMP_WIDTH = "2026-07-15T09:12:41Z".length;
 export const viewCommand: CommandDefinition = {
   name: "view",
   projectAccess: "read",
-  unenrolledRead: "error",
+  unenrolledRead: "empty",
   description: "render one Session's event timeline in source order; read-only",
   arguments: [{ name: "session-id", description: "the Session ID" }],
   options: [
+    {
+      flags: "--revision <digest>",
+      description: "require the revision returned by search; fail if evidence changed",
+    },
+    { flags: "--saved", description: "read only saved Store evidence" },
     {
       flags: "--filter <value>",
       description: `slice events by ${FILTER_VOCABULARY}; repeatable, values union`,
@@ -81,15 +86,36 @@ export const viewCommand: CommandDefinition = {
 
     await requireSessionUnconflicted(ctx.project.paths.storeDir, sessionId);
 
-    const handle = await ensureProjection(ctx.project, ctx.env);
-    const db = openProjection(handle.dbPath);
+    const handle = await queryProjection(ctx, options["saved"] === true);
+    const db = handle.db;
     try {
       const session = getSession(db, sessionId);
-      if (!session) throw await missingSessionError(ctx.project.paths.storeDir, sessionId);
+      if (!session) {
+        if ((await locallyForgotten(ctx.project.home)).has(sessionId))
+          throw new GliaError("SESSION_DELETED", `Session ${sessionId} was forgotten locally`, {
+            sessionId,
+          });
+        const missing = await missingSessionError(ctx.project.paths.storeDir, sessionId);
+        if (missing.code === "SESSION_DELETED") throw missing;
+        if (handle.issues.length > 0 || options["revision"] !== undefined)
+          throw new GliaError(
+            "SOURCE_INCOMPLETE",
+            "Session evidence is unavailable in this query",
+            { sessionId, issues: handle.issues },
+          );
+        throw missing;
+      }
+      if (options["revision"] !== undefined && options["revision"] !== session.revisionDigest) {
+        throw new GliaError(
+          "SOURCE_INCOMPLETE",
+          "Session evidence changed since the cited query; search again or use --saved with the saved revision",
+          { sessionId, expected: options["revision"], actual: session.revisionDigest },
+        );
+      }
       const sourceFiles = getSessionSourceFiles(db, sessionId);
       const spawned = spawnedSubagentSessions(db, sessionId);
       const header = sessionHeaderJson(session, sourceFiles, spawned);
-      const projection = { storeCommit: handle.storeCommit, stale: handle.stale };
+      const projection = readableProjectionJson(handle, [sessionId]);
 
       if (seq !== null) {
         const event = getEventBySeq(db, sessionId, seq);
@@ -101,7 +127,8 @@ export const viewCommand: CommandDefinition = {
         }
         return {
           json: { session: header, event: detailEventJson(event), projection },
-          human: renderDetail(session, sourceFiles, event, spawned),
+          human:
+            renderDetail(session, sourceFiles, event, spawned) + readableNotes(handle, [sessionId]),
         };
       }
 
@@ -125,7 +152,9 @@ export const viewCommand: CommandDefinition = {
           },
           projection,
         },
-        human: renderTimeline(session, sourceFiles, timeline, window, spawned),
+        human:
+          renderTimeline(session, sourceFiles, timeline, window, spawned) +
+          readableNotes(handle, [sessionId]),
       };
     } finally {
       db.close();

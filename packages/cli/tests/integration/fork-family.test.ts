@@ -822,7 +822,7 @@ describe("Session Fork Family", () => {
     await Bun.write(pointerFile, JSON.stringify(pointer, null, 2) + "\n");
 
     const anchor = [recId("rebuild-origin"), recId("rebuild-twin")].sort()[0]!;
-    const listed = await list();
+    const listed = await list({ saved: true });
     expect(listed.json.sessions.find((r) => r.sessionId === anchor)!.family?.memberCount).toBe(2);
     const rebuilt = JSON.parse(await Bun.file(pointerFile).text()) as Record<string, unknown>;
     expect(rebuilt["projectionVersion"]).toBe(PROJECTION_VERSION);

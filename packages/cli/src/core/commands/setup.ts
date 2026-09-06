@@ -1,49 +1,19 @@
-import { HARNESS_IDS, type HarnessId } from "../harnesses/ids.ts";
 import type { CommandOutcome } from "../output/result.ts";
-import { confirmProceed } from "../output/confirm.ts";
-import { GliaError } from "../output/errors.ts";
 import { withProgress } from "../output/progress.ts";
-import { gliaHome } from "../project/paths.ts";
-import { loadProject, loadProjectForRead } from "../project/load.ts";
-import { worktreeTopLevelOrNull } from "../project/resolve.ts";
-import { runImport, type ImportReport } from "../../session/domain/import.ts";
-import { humanImportReport } from "../../session/commands/import.ts";
-import { confirmFirstImport } from "../../session/commands/import.ts";
 import { runSkillInstall, runSkillRemove } from "./skill.ts";
-import {
-  harnessIsPresent,
-  runHookInstall,
-  runHookRemove,
-  type HookCommandContext,
-} from "./hook.ts";
+import { runHookRemove, type HookCommandContext } from "./hook.ts";
 
 export interface SetupCommandContext extends HookCommandContext {
   cwd: string;
   homeDir: string;
   jsonMode: boolean;
   inputDisabled: boolean;
-  /** Test seam for the optional backlog offer. */
-  confirmImport?: (message: string) => Promise<boolean>;
   /** Test seam for observing progress phase boundaries without drawing. */
   progress?: typeof withProgress;
 }
 
 export async function runSetup(ctx: SetupCommandContext): Promise<CommandOutcome> {
   const progress = ctx.progress ?? withProgress;
-  const hooks = await progress(
-    ctx,
-    "Installing SessionEnd hooks",
-    () => "SessionEnd hooks configured",
-    async () => {
-      const presence = new Map<HarnessId, boolean>();
-      for (const harnessId of HARNESS_IDS) {
-        presence.set(harnessId, await harnessIsPresent(harnessId, ctx.env));
-      }
-      // Snapshot presence before installing ~/.claude/skills/glia, which must
-      // not manufacture a Claude Code installation on an otherwise absent machine.
-      return await runHookInstall(ctx, presence);
-    },
-  );
   const skill = await progress(
     ctx,
     "Installing Glia skill",
@@ -61,78 +31,9 @@ export async function runSetup(ctx: SetupCommandContext): Promise<CommandOutcome
         },
       ),
   );
-
-  const worktree = await worktreeTopLevelOrNull(ctx.cwd);
-  let importReport: ImportReport | null = null;
-  let backlogGuidance: string | null = null;
-  if (worktree !== null && ctx.inputDisabled) {
-    backlogGuidance =
-      "Backlog import skipped because input is disabled; run `glia import` here to opt in this repository.";
-  } else if (worktree !== null) {
-    const confirm = ctx.confirmImport ?? confirmProceed;
-    const readProject = await loadProjectForRead(worktree, gliaHome(ctx.env));
-    let accepted = false;
-    if (readProject.enrollment.kind === "unenrolled") {
-      try {
-        await confirmFirstImport(
-          {
-            project: readProject,
-            env: ctx.env,
-            jsonMode: ctx.jsonMode,
-            inputDisabled: ctx.inputDisabled,
-          },
-          {},
-          confirm,
-        );
-        accepted = true;
-      } catch (error) {
-        if (!(error instanceof GliaError) || error.code !== "CANCELLED") throw error;
-      }
-    } else {
-      accepted = await confirm("Import this repository's existing Session backlog now?");
-    }
-    if (accepted) {
-      importReport = await progress(
-        ctx,
-        "Importing existing Session backlog",
-        (report) =>
-          `Backlog import complete: ${report.accepted.length} accepted, ${report.unchanged} unchanged`,
-        async () => {
-          const project = await loadProject(worktree, gliaHome(ctx.env));
-          return await runImport(project, ctx.env, {
-            harness: null,
-            dryRun: false,
-            onlyCandidateIds: null,
-          });
-        },
-      );
-    } else {
-      backlogGuidance = "Backlog import skipped; run `glia import` here whenever you are ready.";
-    }
-  }
-
-  const trustNotice =
-    "On next launch, each installed Harness will ask you to trust/confirm the new SessionEnd hook; automation is inert until approved.";
-  const pathNotice =
-    `The hook depends on ${(ctx.selfCommand ?? [ctx.executablePath]).join(" ")}; ` +
-    "re-run `glia setup` after moving or replacing that command.";
-  const lines = [hooks.human, skill.human];
-  if (importReport !== null) lines.push(humanImportReport(importReport));
-  if (backlogGuidance !== null) lines.push(backlogGuidance);
-  lines.push(trustNotice, pathNotice);
   return {
-    json: {
-      hooks: hooks.json,
-      skill: skill.json,
-      backlog: {
-        worktree,
-        imported: importReport,
-        guidance: backlogGuidance,
-      },
-      trustRequired: true,
-      executablePath: ctx.executablePath,
-    },
-    human: lines.join("\n"),
+    json: { skill: skill.json },
+    human: `${skill.human}\nSearch local Sessions immediately with \`glia search\`.\nRun \`glia import\` to save existing Sessions, or \`glia import --auto-save on\` to also save future Sessions automatically.`,
   };
 }
 

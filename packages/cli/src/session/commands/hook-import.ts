@@ -1,3 +1,4 @@
+import { autoSaveEnabled } from "../../core/project/auto-save.ts";
 import { spawn } from "node:child_process";
 import { basename, resolve } from "node:path";
 import { GliaError, toGliaError } from "../../core/output/errors.ts";
@@ -86,12 +87,13 @@ export async function runHookInvocation(ctx: HookInvocationContext): Promise<voi
       if (error instanceof GliaError && error.code === "NOT_A_GIT_WORKTREE") return;
       return;
     }
-    if (project === null) return;
+    if (project === null || !(await autoSaveEnabled(project))) return;
 
     const startedAt = new Date().toISOString();
     let runRecord: HookRunReport;
     try {
       const report = await runImport(project, ctx.env, {
+        automatic: true,
         harness: null,
         dryRun: false,
         onlyCandidateIds: null,

@@ -25,7 +25,7 @@ export interface SessionRow extends SubagentColumns {
   associationMode: string;
   continuationParent: string | null;
   revisionDigest: string;
-  acceptedAt: string;
+  acceptedAt: string | null;
   archiveState: ArchiveState;
   eventCount: number;
   firstTimestamp: string | null;

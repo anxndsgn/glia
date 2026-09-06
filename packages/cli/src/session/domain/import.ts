@@ -1,3 +1,5 @@
+import { locallyForgotten } from "./local-state.ts";
+import { autoSaveEnabled } from "../../core/project/auto-save.ts";
 import { join } from "node:path";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -51,6 +53,8 @@ import { appendWithheldLosses, type WithheldLossRecord } from "./withheld-loss.t
 export interface ImportOptions {
   harness: HarnessId | null;
   dryRun: boolean;
+  /** Hook acceptance rechecks the local opt-in under the writer lease. */
+  automatic?: boolean;
   /** When set (`glia accept` and interactive import follow-ups), only
    *  these candidates are considered for acceptance. */
   onlyCandidateIds: string[] | null;
@@ -407,6 +411,10 @@ export async function runImport(
       // Explicit decisions use this same writer lease. Once acquired, this
       // snapshot cannot be superseded by a well-behaved ignore/association
       // command before the Store write below.
+      if (options.automatic === true && !(await autoSaveEnabled(project))) {
+        throw new GliaError("CANCELLED", "automatic saving was disabled during capture");
+      }
+      const forgotten = await locallyForgotten(project.home);
       const decisionState = await readDiscoveryState(project.paths.discoveryFile);
       // One Binding scan amortized across every staged candidate; ownership
       // within this lease reads one consistent Binding snapshot.
@@ -416,7 +424,10 @@ export async function runImport(
       // 3.–4. Revalidate sources, accept Source Bundles, commit the Store once.
       for (const item of staged) {
         let candidate = item.classified.candidate;
-        if (decisionState.ignored.includes(candidate.candidateId)) {
+        if (
+          forgotten.has(candidate.candidateId) ||
+          decisionState.ignored.includes(candidate.candidateId)
+        ) {
           report.ignored += 1;
           continue;
         }

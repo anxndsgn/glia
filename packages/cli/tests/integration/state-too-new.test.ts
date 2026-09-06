@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
 import { readBindings } from "../../src/core/project/bindings.ts";
+import { autoSaveEnabled, setAutoSave } from "../../src/core/project/auto-save.ts";
 import { readReplicaIdentity } from "../../src/core/project/identity.ts";
 import { identityFile } from "../../src/core/project/paths.ts";
 import { readDeclaration, writeDeclaration } from "../../src/core/config/glia-json.ts";
@@ -138,6 +139,22 @@ describe("STATE_TOO_NEW: state written by a newer Glia names the binary, not the
       ]),
     ).rejects.toMatchObject({ code: "STATE_TOO_NEW" });
     expect(JSON.parse(await Bun.file(file).text())).toEqual(future);
+  });
+
+  test("automatic saving state refuses newer reads and downgrade writes", async () => {
+    const isolated = {
+      ...project,
+      paths: { ...project.paths, stateDir: join(env.root, "too-new-auto-save") },
+    };
+    const file = join(isolated.paths.stateDir, "auto-save.json");
+    await writeJson(file, { schemaVersion: 2, enabled: true, futureSentinel: "must survive" });
+    const before = await Bun.file(file).text();
+
+    await expect(autoSaveEnabled(isolated)).rejects.toMatchObject({ code: "STATE_TOO_NEW" });
+    for (const enabled of [true, false]) {
+      await expect(setAutoSave(isolated, enabled)).rejects.toMatchObject({ code: "STATE_TOO_NEW" });
+      expect(await Bun.file(file).text()).toBe(before);
+    }
   });
 
   test("the message carries the versions and the upgrade remedy", async () => {

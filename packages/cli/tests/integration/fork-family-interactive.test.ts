@@ -14,9 +14,11 @@ import {
   initProject,
   makeTestEnv,
   writeClaudeSession,
+  writeCodexSession,
   type TestEnv,
 } from "../helpers.ts";
 import type { CommandRunContext, LoadedProject } from "../../src/core/session-module.ts";
+import { readDiscoveryState } from "../../src/session/domain/discovery-state.ts";
 import { runImport } from "../../src/session/domain/import.ts";
 import { importCommand } from "../../src/session/commands/import.ts";
 import { acceptCommand } from "../../src/session/commands/accept.ts";
@@ -93,7 +95,7 @@ async function copiedTwin(
 }
 
 describe("interactive glia import family hint", () => {
-  test("the fork-family note renders before the flagged and pending decision prompts", async () => {
+  test("import prompts only for flagged Candidates and preserves their family hints", async () => {
     const cwd = testEnv.worktree;
     await writeClaudeSession(testEnv.claudeHome, {
       sessionId: "flag-origin",
@@ -127,27 +129,23 @@ describe("interactive glia import family hint", () => {
       join(flagTwin.dir, "flag-twin.jsonl"),
       [...flagTwin.copied, suffix].join("\n") + "\n",
     );
-    // A second fork twin with its opening path stripped stays pending, so
-    // association is the decision its prompt must carry the hint for.
+    // A second fork twin with its opening path stripped stays pending
+    // without an association prompt.
     const pendingTwin = await copiedTwin("pending-origin", "pending-twin", true);
     await Bun.write(
       join(pendingTwin.dir, "pending-twin.jsonl"),
       pendingTwin.copied.join("\n") + "\n",
     );
 
-    // The default mock answer ("skip") leaves both Candidates undecided:
-    // the hint never becomes a gate.
+    // The flagged prompt defaults to skip; the pending Candidate needs no decision.
     const outcome = await importCommand.run(interactiveCtx(), [], {});
     const report = outcome.json as { flagged: unknown[]; pending: unknown[]; accepted: unknown[] };
     expect(report.flagged).toHaveLength(1);
     expect(report.pending).toHaveLength(1);
     expect(report.accepted).toHaveLength(0);
-    expect(selectMessages).toHaveLength(2);
+    expect(selectMessages).toHaveLength(1);
 
     const flaggedPrompt = selectMessages.find((m) => m.includes("Accept anyway?"))!;
-    const pendingPrompt = selectMessages.find((m) =>
-      m.includes("Associate it with this project?"),
-    )!;
     // The twin's secret suffix keeps it short of full containment, and the
     // stored origin is named by its Label alongside its ID.
     expect(flaggedPrompt).toMatch(
@@ -157,13 +155,20 @@ describe("interactive glia import family hint", () => {
     expect(flaggedPrompt.indexOf("(fork family)")).toBeLessThan(
       flaggedPrompt.indexOf("Accept anyway?"),
     );
-    expect(pendingPrompt).toContain("(fork family)");
-    expect(pendingPrompt.indexOf("(fork family)")).toBeLessThan(
-      pendingPrompt.indexOf("Associate it with this project?"),
-    );
+    expect(outcome.human).toContain("Skipped 1 Session(s) whose Project could not be determined");
+    expect(outcome.human).toContain("glia accept --interactive");
+
+    selectMessages = [];
+    selectAnswers = ["accept"];
+    const second = await importCommand.run(interactiveCtx(), [], {});
+    const accepted = second.json as { accepted: { flaggedRules: string[] }[]; pending: unknown[] };
+    expect(selectMessages).toHaveLength(1);
+    expect(accepted.accepted).toHaveLength(1);
+    expect(accepted.accepted[0]!.flaggedRules).toContain("anthropic-api-key");
+    expect(accepted.pending).toHaveLength(1);
   });
 
-  test("glia accept shows the family hint before confirmation and Store mutation", async () => {
+  test("explicitly accepting a pending Candidate shows its family hint before Store mutation", async () => {
     await writeClaudeSession(testEnv.claudeHome, {
       sessionId: "accept-origin",
       cwd: testEnv.worktree,
@@ -174,7 +179,7 @@ describe("interactive glia import family hint", () => {
       dryRun: false,
       onlyCandidateIds: null,
     });
-    const { dir, copied } = await copiedTwin("accept-origin", "accept-twin");
+    const { dir, copied } = await copiedTwin("accept-origin", "accept-twin", true);
     await Bun.write(join(dir, "accept-twin.jsonl"), copied.join("\n") + "\n");
     const twinId = sessionIdOf({
       harnessId: "claude-code",
@@ -195,59 +200,46 @@ describe("interactive glia import family hint", () => {
     confirmAnswers = [true];
     const accepted = await acceptCommand.run(interactiveCtx(), [twinId], {});
     expect((accepted.json as { accepted: unknown[] }).accepted).toHaveLength(1);
+    expect((await readSessionMeta(project.paths.storeDir, twinId))?.association.mode).toBe(
+      "explicit",
+    );
   });
 
-  test("associating a pending Candidate keeps the secret gate; its flagged prompt follows", async () => {
+  test("interactive import skips missing and absent opening paths without blocking current-project work", async () => {
     await writeClaudeSession(testEnv.claudeHome, {
-      sessionId: "gate-origin",
+      sessionId: "current-project",
       cwd: testEnv.worktree,
-      userText: "GATEPROBE shared prefix",
     });
-    await runImport(project, testEnv.env, {
-      harness: null,
-      dryRun: false,
-      onlyCandidateIds: null,
+    const missingPath = await writeClaudeSession(testEnv.claudeHome, {
+      sessionId: "vanished-project",
+      cwd: join(testEnv.root, "missing-project"),
+      userText: `old project credential ${FAKE_KEY}`,
     });
-
-    // A pending fork twin (no opening path) whose unique suffix carries a
-    // suspected secret: association alone must not accept the bytes.
-    const { dir, copied } = await copiedTwin("gate-origin", "gate-twin", true);
-    const suffix = JSON.stringify({
-      type: "user",
-      uuid: "gate-twin-secret",
-      sessionId: "gate-twin",
-      timestamp: "2026-07-15T11:00:00Z",
-      message: { role: "user", content: `my key is ${FAKE_KEY}` },
+    const noPath = await writeCodexSession(testEnv.codexHome, {
+      sessionId: "99999999-2222-3333-4444-555555555555",
+      cwd: null,
     });
-    await Bun.write(join(dir, "gate-twin.jsonl"), [...copied, suffix].join("\n") + "\n");
-    const twinId = sessionIdOf({ harnessId: "claude-code", sourceSessionId: "gate-twin" });
-
-    // Associate at the pending prompt, then decide later at the flagged one.
-    selectAnswers = ["associate"];
-    const outcome = await importCommand.run(interactiveCtx(), [], {});
-    const report = outcome.json as { pending: unknown[]; flagged: unknown[]; accepted: unknown[] };
-    expect(selectMessages).toHaveLength(2);
-    expect(selectMessages[0]).toContain("Associate it with this project?");
-    expect(selectMessages[1]).toContain("Accept anyway?");
-    expect(report.pending).toHaveLength(0);
-    expect(report.flagged).toHaveLength(1);
-    expect(report.accepted).toHaveLength(0);
-    expect(await readSessionMeta(project.paths.storeDir, twinId)).toBeNull();
-
-    // The next interactive import re-presents the flagged Candidate;
-    // accepting records the override in the Session's metadata.
-    selectMessages = [];
-    selectAnswers = ["accept"];
-    const second = await importCommand.run(interactiveCtx(), [], {});
-    const secondReport = second.json as {
-      flagged: unknown[];
-      accepted: { sessionId: string; flaggedRules: string[] }[];
-    };
-    expect(selectMessages).toHaveLength(1);
-    expect(secondReport.flagged).toHaveLength(0);
-    expect(secondReport.accepted).toHaveLength(1);
-    expect(secondReport.accepted[0]!.flaggedRules).toContain("anthropic-api-key");
-    const meta = await readSessionMeta(project.paths.storeDir, twinId);
-    expect(meta?.secretDetectionOverride?.ruleIds).toContain("anthropic-api-key");
+    const originals = await Promise.all([missingPath, noPath].map((path) => Bun.file(path).text()));
+    for (let run = 0; run < 2; run++) {
+      const outcome = await importCommand.run(interactiveCtx(), [], {});
+      const report = outcome.json as {
+        pending: unknown[];
+        flagged: unknown[];
+        accepted: unknown[];
+      };
+      expect(report.accepted).toHaveLength(run === 0 ? 1 : 0);
+      expect(report.pending).toHaveLength(2);
+      expect(report.flagged).toHaveLength(0);
+      expect(selectMessages).toEqual([]);
+      expect(confirmMessages).toEqual([]);
+      expect(outcome.human).toContain("Skipped 2 Session(s) whose Project could not be determined");
+      expect(outcome.human).toContain("glia accept --interactive");
+    }
+    expect(await Promise.all([missingPath, noPath].map((path) => Bun.file(path).text()))).toEqual(
+      originals,
+    );
+    const discovery = await readDiscoveryState(project.paths.discoveryFile);
+    expect(discovery.associations).toEqual({});
+    expect(discovery.ignored).toEqual([]);
   });
 });
