@@ -1,6 +1,6 @@
 # Glia
 
-Glia captures coding-agent Sessions, preserves their source evidence in a local Git-backed Store, and makes them searchable without sending data to a service.
+Glia searches coding-agent Sessions directly on your machine. Import Sessions to preserve them in a local Git-backed Store; add a remote when you need synchronization.
 
 It supports Claude Code and Codex source Sessions. Import, query, archive, deletion, conflict resolution, export, and synchronization are built in.
 
@@ -24,52 +24,63 @@ Run the source CLI with `bun run dev:cli -- <command>`.
 
 ## First use
 
-Install the bundled agent skill and SessionEnd automation once per machine:
+Install the bundled agent skill once per machine, then search immediately:
 
 ```sh
 glia setup
-```
-
-Setup installs the skill in both global skill-directory conventions and adds a
-`SessionEnd` hook to each Harness already present on the machine. Claude Code
-and Codex will ask you to trust or confirm the new hook on their next launch;
-automatic imports do not run until you approve it. The hook records the
-absolute path of the `glia` binary, so re-run `glia setup` after moving or
-replacing that binary.
-
-Inside a Git worktree, interactive setup offers to import the existing backlog.
-With `--no-input`, it prints the manual follow-up instead:
-
-```sh
-glia import
 glia list
 glia search "authentication failure"
 glia view <session-id>
 ```
 
-Read commands do not enroll a repository. Before enrollment, `list`, `search`,
-`conflicts`, `tombstones`, `candidates`, `status`, `store remote show`, and
-`import --dry-run` report an empty or preview result without creating anything
-under `~/.glia`. Their JSON results carry `enrolled: false`, a null
-`projectId`, and a `not_enrolled` advisory with the number of Candidates that
-would be captured. Direct requests for a Session (`view`, `show`, and `export`)
-return `NOT_ENROLLED` instead of pretending the Session ID is missing.
+Setup installs the global skill for Claude Code and Codex. Searching requires no
+import or Project enrollment. It discovers Sessions in the Harness source
+locations and builds a disposable SQLite cache under `~/.glia/cache/reads`.
+Changed Sessions are re-indexed when queried, including Sessions still in progress.
+Search, list, show, and view merge local sources with saved Sessions and deduplicate
+by Source Identity. Searches never write to the Store or contact a remote.
 
-Enrollment happens when you run a command that keeps or changes Project data,
-such as `import`, `accept`, `archive`, `delete`, `resolve`, `sync`, `setup`,
-`project adopt`, or an applied `store remote set`. Its `--dry-run` preview remains
-read-only. The first interactive `glia import` explains the Store,
-backlog, secret-withholding, and installed-hook consequences before creating
-the Project, Replica identity, Binding, and local Store under `~/.glia`.
-Scripted `--no-input` and `--json` imports proceed without prompting. Glia does
-not add a file to the code repository unless you explicitly run
-`store remote set`, which writes `glia.json`.
+The default scope is the current Project. Worktrees of the same local Git repository
+share scope; independent clones do not merge merely because their remotes match.
+Explicit Bindings take priority. Outside Git, the current directory and its descendants
+claim Sessions whose recorded opening directory falls inside that scope.
 
-Once a repository has a Binding, ending a Claude Code or Codex Session triggers
-a silent background import for that Project. Hook runs outside a Git worktree or
-inside a repository that has never enrolled are quiet no-ops. Use `glia status`
-to inspect both machine-global hook liveness and the latest hook import for the
-current Project, or to diagnose an unenrolled repository without changing it.
+Save existing Sessions when you want them to survive Harness cleanup:
+
+```sh
+glia import                        # Save existing Sessions once
+glia import --auto-save on         # Save now and enable future automatic saving
+glia import --auto-save off        # Stop automatic saving; retain saved Sessions
+```
+
+Automatic saving is a separate, machine-local Project setting, off by default.
+Enabling it installs SessionEnd hooks for present Harnesses; approve them when
+Claude Code or Codex prompts. The setting covers the Project's local worktrees
+(or its ordinary-directory scope) and does not propagate through the remote.
+A plain import leaves this setting unchanged. After moving the Glia executable,
+run `glia import --auto-save on` again to refresh its hook command.
+
+The first interactive import previews persistence and secret checks before creating
+the Project's local Store. `--json` and `--no-input` are non-interactive. Glia writes
+`glia.json` into the code directory only when `store remote set` is explicitly run.
+Use `glia status` to inspect the automatic-saving setting and hook liveness.
+
+Query JSON includes `projection.sources`, keyed by visible Session ID. It states
+whether evidence comes from `local` or `store`, whether a saved version exists,
+and the selected and saved revision digests. `savedVersionBehind` identifies a
+saved snapshot that differs from the selected local version. Local `files` map
+bundle-relative evidence locators to actual Harness paths. Unsaved Sessions have
+no acceptance timestamp. Human output labels unsaved or changed local evidence.
+
+Use `--saved` with search, list, show, or view to read only preserved Store evidence.
+For citations, use `view <id> --seq <n> --revision <digest>` with the digest returned
+by search; a changed revision fails explicitly rather than silently changing the
+citation. A saved superset is preferred over an older, shorter local copy.
+
+Source failures and malformed records produce `projection.partial: true` with
+`issues`, even when there are zero matches. A missing remote Store is also reported
+as partial while local search remains available. Unsaved cache entries disappear
+from queries when their source disappears; the cache is not a preservation service.
 
 Inspect and manage machine-local Bindings from any directory:
 
@@ -82,8 +93,8 @@ glia project adopt [path] [--delete-old]
 ```
 
 `project forget` removes only the Binding; its Store and Sessions remain. A root
-enables SessionEnd capture, while an alias claims historical Sessions without
-enabling capture at that path. If a worktree's `glia.json` declares a different
+admits SessionEnd capture when automatic saving is enabled; an alias claims
+historical Sessions without enabling capture at that path. If a worktree's `glia.json` declares a different
 Project than its local Binding, `project adopt` accepts the declaration, merges
 the locally bound Sessions and metadata into the declared Project, and promotes
 the worktree to a capturing root. The merge is local; run `glia sync` afterwards
@@ -92,10 +103,6 @@ the old Project only when it has no other Bindings. Use `project list` to find
 rootless Projects, missing checkout paths, and Stores that have not yet been
 synced locally.
 
-If a search returns no matches, its human output and JSON `advisories` report
-non-zero importable, pending, and withheld Candidate counts. A search with
-results does not run discovery.
-
 To share the Store, declare a credential-free Git remote:
 
 ```sh
@@ -103,7 +110,7 @@ glia store remote set <url> --yes
 glia sync
 ```
 
-`store remote set` is the only command that writes `glia.json`. Network access occurs only during `glia sync`; a fresh checkout with a declaration bootstraps its local Store on the first sync.
+`store remote set` is the only command that writes `glia.json`. Network access occurs only during `glia sync`; a fresh checkout with a declaration bootstraps its local Store on the first sync. Sync transfers saved content only and never imports local Sessions or enables automatic saving.
 
 ## Commands
 
@@ -134,7 +141,7 @@ rejects `--json`.
 
 ## Data and security
 
-Secret Detection is enabled by default and gates acceptance when suspected credentials are found. A Project may disable it in `glia.json` with:
+Local search reads native evidence without the import secret gate. Secret Detection is enabled by default and gates Store acceptance when suspected credentials are found. A Project may disable it in `glia.json` with:
 
 ```json
 {
@@ -150,7 +157,9 @@ surface the withheld count and age; after 14 days they warn that Harness
 retention may delete the source. Review with `glia candidates --status flagged`
 and accept a flagged Candidate only through an explicit user decision.
 
-Remove machine automation with `glia setup remove`. Removal only touches hook
+`glia delete <session-id> --yes` makes Glia forget a Session. Saved Sessions are purged from Store history with a replicated tombstone; unsaved Sessions receive a payload-free local exclusion that survives cache deletion and later import. Both stay out of default search and automatic import, and Harness source files are retained.
+
+Remove machine integration with `glia setup remove`. Removal only touches hook
 entries and skill files that Glia can positively identify as its own; edited or
 foreign entries are reported and left intact.
 
